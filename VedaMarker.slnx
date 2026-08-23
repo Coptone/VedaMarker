@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VedaMarker.Core/VedaMarker.Core.csproj" />
+    <Project Path="src/VedaMarker/VedaMarker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VedaMarker.Capture.Tests/VedaMarker.Capture.Tests.csproj" />
+    <Project Path="tests/VedaMarker.Core.Tests/VedaMarker.Core.Tests.csproj" />
+  </Folder>
+</Solution>

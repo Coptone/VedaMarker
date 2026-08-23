@@ -1,0 +1,9 @@
+{
+  "Author": "Coptone",
+  "Name": "VedaMarker",
+  "Punchline": "绝妖星 P2 遗弃末世的自动职责识别与团队标点。",
+  "Description": "VedaMarker：DMU P2 八轮状态管理、职责识别、手动主控标点，以及本地原生 VFX/Telegraph 技术验证。",
+  "InternalName": "VedaMarker",
+  "ApplicableVersion": "any",
+  "Tags": ["dmu", "marker", "raid", "utility"]
+}
