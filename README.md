@@ -1,19 +1,22 @@
 # VedaMarker
 
 VedaMarker is a standalone Dalamud plugin for the DMU P2 **Forsaken** encounter.
-The first milestone provides deterministic role inference, an eight-wave state
-machine, dry-run marker assignments, and a privacy-preserving evidence recorder.
+The current testing milestone provides deterministic role inference, automatic
+eight-wave status recognition, dry-run marker assignments, an opt-in experimental
+Party Marker queue, and a privacy-preserving evidence recorder.
 
 ## Current status
 
-- P0 scaffold, manual dry-run controller, and redacted capture workflow: implemented; awaiting in-game capture
-- P1 role inference, Forsaken state machine, and marker rules: implemented and unit tested
-- Real party target markers: blocked on an in-game PoC
+- P0 scaffold, manual controller, and redacted capture workflow: implemented and captured in game
+- P1 role inference, Forsaken state machine, automatic wave recognition, and marker rules: implemented and unit tested
+- Real party target markers: opt-in experimental provider; disabled by default pending an in-game submission/cleanup PoC
 - Persistent native VFX: blocked on captured resource evidence
 - Native AoE telegraphs: blocked on per-mechanic validation
 
 The plugin never moves the player, simulates input, or executes combat actions.
-Only one user-selected controller may eventually submit real party markers.
+Real party markers require manual role confirmation, an explicit experimental
+toggle, and manual controller arming. Only one user-selected controller should
+submit them.
 
 ## Install with Dalamud
 
@@ -24,9 +27,9 @@ Repositories, then search for `VedaMarker` in the plugin installer:
 https://raw.githubusercontent.com/Coptone/VedaMarker/main/pluginmaster.json
 ```
 
-The currently published package is the capture/testing build. Real party
-markers, persistent native VFX, and native AoE telegraphs remain disabled until
-their in-game evidence gates pass.
+The published package is a testing build. Experimental real party markers are
+disabled by default; persistent native VFX and native AoE telegraphs remain
+unavailable until their separate in-game evidence gates pass.
 
 ## Repository layout
 

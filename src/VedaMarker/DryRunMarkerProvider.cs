@@ -6,32 +6,42 @@ internal interface IMarkerProvider
 {
     string Name { get; }
 
-    bool IsNative { get; }
+    bool ProducesGameMarkers { get; }
 
-    void Submit(ValidatedMarkerAssignment assignment);
+    int PendingCommandCount { get; }
 
-    void Clear();
+    void Submit(
+        ValidatedMarkerAssignment assignment,
+        IReadOnlyDictionary<RoleSlot, int> partySlots);
+
+    void Tick(long now);
+
+    void Clear(bool immediate = false);
 }
 
 internal sealed class DryRunMarkerProvider : IMarkerProvider
 {
     public string Name => "Dry-run";
 
-    public bool IsNative => false;
+    public bool ProducesGameMarkers => false;
+
+    public int PendingCommandCount => 0;
 
     public ValidatedMarkerAssignment? LastAssignment { get; private set; }
 
-    public void Submit(ValidatedMarkerAssignment assignment)
+    public void Submit(
+        ValidatedMarkerAssignment assignment,
+        IReadOnlyDictionary<RoleSlot, int> partySlots)
     {
-        if (assignment.Markers.Count != 8 || assignment.Markers.Values.Distinct().Count() != 8)
-        {
-            throw new MarkerAssignmentException("Dry-run provider 拒绝不完整或重复的标点集合。");
-        }
-
+        _ = PartyMarkerCommandPlanner.BuildAssignmentCommands(assignment, partySlots);
         LastAssignment = assignment;
     }
 
-    public void Clear()
+    public void Tick(long now)
+    {
+    }
+
+    public void Clear(bool immediate = false)
     {
         LastAssignment = null;
     }

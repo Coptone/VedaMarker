@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 ## Confirmed decisions
 
@@ -21,7 +21,8 @@ Last updated: 2026-08-23
 - [x] P1 automatic role inference with tests
 - [x] P1 Forsaken eight-wave state machine with tests
 - [x] P1 odd/even marker assignment rules with tests
-- [ ] P0 in-game capture: encounter/phase/wave evidence
+- [x] P0 in-game capture: encounter/phase/wave evidence
+- [x] P1 automatic status-to-wave recognition and complete marker queue
 - [ ] P0 in-game PoC: real Party Target Marker and throttling
 - [ ] P1 in-game PoC: persistent point-name VFX
 - [ ] P1 per-mechanic native telegraph validation
@@ -30,7 +31,8 @@ Items requiring game evidence remain unchecked even when the code builds.
 
 ## Verification
 
-- Core rules: 10 tests passed on .NET 10.
+- Core rules and automatic capture replay: 17 tests passed on .NET 10.
 - Capture privacy/export: 1 test passed; ZIP contains only versioned manifest and JSONL.
 - Dalamud API 15 Release build: 0 warnings, 0 errors against the official staging development files.
-- No in-game PoC has been completed yet; real marking, VFX, and telegraphs remain disabled.
+- Full in-game Forsaken status sequence is documented under `docs/evidence/`.
+- Real marking, VFX, and telegraph PoCs remain incomplete; real markers are experimental and disabled by default, while VFX/AoE remain unavailable.

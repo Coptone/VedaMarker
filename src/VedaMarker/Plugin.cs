@@ -35,10 +35,14 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly PluginConfiguration configuration;
     private readonly PartyRoleCoordinator roleCoordinator = new();
-    private readonly IMarkerProvider markerProvider = new DryRunMarkerProvider();
+    private readonly ForsakenAutomationEngine automationEngine = new();
+    private readonly DryRunMarkerProvider dryRunMarkerProvider = new();
+    private readonly ChatCommandMarkerProvider gameMarkerProvider;
     private readonly CaptureRecorder captureRecorder;
+    private IMarkerProvider activeMarkerProvider;
     private Hook<ReceiveActionEffectDelegate>? actionEffectHook;
     private IReadOnlyList<RuntimePartyMember> currentParty = Array.Empty<RuntimePartyMember>();
+    private ValidatedMarkerAssignment? currentAssignment;
     private string partySignature = string.Empty;
     private string status = "P0/P1：等待读取队伍";
     private bool showWindow;
@@ -50,6 +54,16 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         configuration = PluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
+        if (configuration.Version < 2)
+        {
+            configuration.Version = 2;
+            configuration.EnableExperimentalPartyMarkers = false;
+            configuration.MarkerCommandIntervalMs = 150;
+            PluginInterface.SavePluginConfig(configuration);
+        }
+
+        gameMarkerProvider = new ChatCommandMarkerProvider(() => configuration.MarkerCommandIntervalMs);
+        activeMarkerProvider = dryRunMarkerProvider;
         captureRecorder = new CaptureRecorder(PluginInterface.GetPluginConfigDirectory());
         lastTerritoryId = ClientState.TerritoryType;
 
@@ -71,7 +85,15 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
-        DisarmController("插件卸载");
+        try
+        {
+            DisarmController("插件卸载", immediateCleanup: true);
+        }
+        catch (Exception exception)
+        {
+            Log.Error(exception, "VedaMarker unload marker cleanup failed");
+        }
+
         actionEffectHook?.Dispose();
         captureRecorder.Dispose();
         DutyState.DutyCompleted -= OnDutyCompleted;
@@ -118,6 +140,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnFrameworkUpdate(IFramework framework)
     {
+        var now = Environment.TickCount64;
         if (lastTerritoryId != ClientState.TerritoryType)
         {
             lastTerritoryId = ClientState.TerritoryType;
@@ -126,12 +149,25 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         RefreshPartyRoles(force: false);
-        if (!captureRecorder.IsActive)
+        try
+        {
+            gameMarkerProvider.Tick(now);
+        }
+        catch (Exception exception)
+        {
+            controllerArmed = false;
+            automationEngine.Reset();
+            currentAssignment = null;
+            gameMarkerProvider.Clear();
+            status = "游戏标点命令提交失败，主控已停止；仍会继续尝试清理已提交标点";
+            Log.Error(exception, "VedaMarker party marker command failed");
+        }
+
+        if (!captureRecorder.IsActive && !controllerArmed)
         {
             return;
         }
 
-        var now = Environment.TickCount64;
         var interval = Math.Clamp(configuration.CapturePollingIntervalMs, 50, 1000);
         if (now - lastCapturePollAt < interval)
         {
@@ -139,13 +175,16 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         lastCapturePollAt = now;
-        PollCapture();
+        PollGameState();
     }
 
-    private void PollCapture()
+    private void PollGameState()
     {
         try
         {
+            var entityRoles = roleCoordinator.Assignments.ToDictionary(
+                entry => entry.Value,
+                entry => entry.Key);
             var party = currentParty.Select(member => new CapturePartyMember(
                 member.PartyIndex,
                 member.EntityId,
@@ -154,6 +193,7 @@ public sealed class Plugin : IDalamudPlugin
 
             var statuses = new List<CaptureStatusObservation>();
             var casts = new List<CaptureCastObservation>();
+            var forsakenStatuses = new List<ForsakenStatusObservation>();
             foreach (var gameObject in ObjectTable)
             {
                 if (gameObject is not IBattleChara battleChara)
@@ -161,7 +201,7 @@ public sealed class Plugin : IDalamudPlugin
                     continue;
                 }
 
-                if (currentParty.Any(member => member.EntityId == battleChara.EntityId))
+                if (entityRoles.TryGetValue(battleChara.EntityId, out var role))
                 {
                     foreach (var actorStatus in battleChara.StatusList)
                     {
@@ -175,6 +215,13 @@ public sealed class Plugin : IDalamudPlugin
                             actorStatus.StatusId,
                             actorStatus.Param,
                             actorStatus.RemainingTime));
+                        if (ForsakenEncounterIds.IsMechanicStatus(actorStatus.StatusId))
+                        {
+                            forsakenStatuses.Add(new ForsakenStatusObservation(
+                                role,
+                                actorStatus.StatusId,
+                                actorStatus.Param));
+                        }
                     }
                 }
 
@@ -187,18 +234,70 @@ public sealed class Plugin : IDalamudPlugin
                 }
             }
 
-            captureRecorder.Observe(
-                ClientState.TerritoryType,
-                Condition[ConditionFlag.InCombat],
-                party,
-                statuses,
-                casts);
+            if (captureRecorder.IsActive)
+            {
+                captureRecorder.Observe(
+                    ClientState.TerritoryType,
+                    Condition[ConditionFlag.InCombat],
+                    party,
+                    statuses,
+                    casts);
+            }
+
+            if (controllerArmed)
+            {
+                ProcessForsakenAutomation(forsakenStatuses);
+            }
         }
         catch (Exception exception)
         {
-            status = "采集轮询出现异常，详情已写入 Dalamud 日志";
-            Log.Error(exception, "VedaMarker capture polling failed");
+            DisarmController("状态识别出现异常，主控已停止并清理");
+            Log.Error(exception, "VedaMarker state polling failed");
         }
+    }
+
+    private void ProcessForsakenAutomation(IReadOnlyList<ForsakenStatusObservation> statuses)
+    {
+        if (ClientState.TerritoryType != ForsakenEncounterIds.Territory)
+        {
+            status = "主控已启动，等待进入绝妖星 P2 对应区域";
+            return;
+        }
+
+        var update = automationEngine.Observe(statuses);
+        if (!update.Changed)
+        {
+            return;
+        }
+
+        if (update.Assignment is not null)
+        {
+            var partySlots = BuildPartySlots();
+            activeMarkerProvider.Submit(update.Assignment, partySlots);
+            currentAssignment = update.Assignment;
+            status = $"{update.Message}；已向 {activeMarkerProvider.Name} 提交完整八人标点";
+        }
+
+        if (update.Completed)
+        {
+            controllerArmed = false;
+            currentAssignment = null;
+            activeMarkerProvider.Clear();
+            status = $"{update.Message}；标点清理已提交";
+        }
+    }
+
+    private IReadOnlyDictionary<RoleSlot, int> BuildPartySlots()
+    {
+        var result = new Dictionary<RoleSlot, int>();
+        foreach (var entry in roleCoordinator.Assignments)
+        {
+            var member = currentParty.SingleOrDefault(candidate => candidate.EntityId == entry.Value)
+                ?? throw new MarkerAssignmentException($"{entry.Key} 对应队员已不在队伍中。");
+            result[entry.Key] = member.PartyIndex + 1;
+        }
+
+        return result;
     }
 
     private void RefreshPartyRoles(bool force)
@@ -262,6 +361,7 @@ public sealed class Plugin : IDalamudPlugin
 
         DrawSafetyPanel();
         DrawRolePanel();
+        DrawAutomationPanel();
         DrawCapturePanel();
         ImGui.End();
     }
@@ -271,19 +371,55 @@ public sealed class Plugin : IDalamudPlugin
         DrawSectionHeader("主控状态");
         ImGui.TextColored(
             controllerArmed ? new Vector4(1f, 0.75f, 0.25f, 1f) : new Vector4(0.55f, 0.9f, 0.55f, 1f),
-            controllerArmed ? "Dry-run 主控已手动启动" : "主控未启动");
-        ImGui.TextWrapped("当前版本只计算与记录，不会产生真实 Party Target Marker、VFX 或 AoE。");
-        ImGui.TextWrapped($"Marker Provider：{markerProvider.Name}（Native={markerProvider.IsNative}）");
+            controllerArmed ? $"{activeMarkerProvider.Name}主控已手动启动" : "主控未启动");
+        ImGui.TextWrapped("点名与八轮切换已接入完整实战数据；AoE 范围仍关闭，等待位置/方向采集验证。");
+
+        if (controllerArmed)
+        {
+            ImGui.BeginDisabled();
+        }
+        var experimentalMarkers = configuration.EnableExperimentalPartyMarkers;
+        if (ImGui.Checkbox("启用真实团队标点（实验，默认关闭）", ref experimentalMarkers))
+        {
+            configuration.EnableExperimentalPartyMarkers = experimentalMarkers;
+            PluginInterface.SavePluginConfig(configuration);
+            status = experimentalMarkers
+                ? "真实团队标点已允许；仍需人工确认职责并手动启动"
+                : "已切回 Dry-run 模式";
+        }
+        if (controllerArmed)
+        {
+            ImGui.EndDisabled();
+        }
+
+        if (configuration.EnableExperimentalPartyMarkers)
+        {
+            ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
+                "实验功能会实际改变全队可见的 Party Target Marker；请确保队内只有一个主控。 ");
+        }
+
+        ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}；待处理命令：{gameMarkerProvider.PendingCommandCount}");
 
         var canArm = rolesConfirmed && roleCoordinator.Assignments.Count == 8 && !controllerArmed;
         if (!canArm)
         {
             ImGui.BeginDisabled();
         }
-        if (ImGui.Button("手动启动 Dry-run 主控"))
+        var armButton = configuration.EnableExperimentalPartyMarkers
+            ? "手动启动真实标点主控（实验）"
+            : "手动启动 Dry-run 主控";
+        if (ImGui.Button(armButton))
         {
+            automationEngine.Reset();
+            currentAssignment = null;
+            activeMarkerProvider = configuration.EnableExperimentalPartyMarkers
+                ? gameMarkerProvider
+                : dryRunMarkerProvider;
             controllerArmed = true;
-            status = "Dry-run 主控已启动；不会向游戏提交真实标点";
+            lastCapturePollAt = 0;
+            status = configuration.EnableExperimentalPartyMarkers
+                ? "真实标点主控已启动；等待遗弃末世开场八人点名"
+                : "Dry-run 主控已启动；等待遗弃末世开场八人点名";
         }
         if (!canArm)
         {
@@ -305,6 +441,46 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         ImGui.TextWrapped(status);
+    }
+
+    private void DrawAutomationPanel()
+    {
+        DrawSectionHeader("遗弃末世识别结果");
+        var snapshot = automationEngine.Snapshot;
+        ImGui.TextWrapped(snapshot.Status == ForsakenEncounterStatus.Inactive
+            ? "等待开场八人点名（建议在遗弃末世读条前启动）"
+            : $"当前：Wave {snapshot.CurrentWave} / {snapshot.Status}");
+
+        if (currentAssignment is null || snapshot.Players.Count != 8)
+        {
+            return;
+        }
+
+        if (!ImGui.BeginTable("ForsakenAssignment", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        {
+            return;
+        }
+
+        ImGui.TableSetupColumn("职责");
+        ImGui.TableSetupColumn("组别");
+        ImGui.TableSetupColumn("点名");
+        ImGui.TableSetupColumn("标点");
+        ImGui.TableHeadersRow();
+        foreach (var role in RoleOrder)
+        {
+            var player = snapshot.Players[role];
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(role.ToString());
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(player.InitialGroup == InitialGroup.InitialTower ? "初始踩塔" : "初始待机");
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(MechanicName(player.CurrentMechanic));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(currentAssignment.Markers[role].ToString());
+        }
+
+        ImGui.EndTable();
     }
 
     private void DrawRolePanel()
@@ -417,7 +593,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             captureRecorder.Start(ClientState.TerritoryType, PluginVersion());
             lastCapturePollAt = 0;
-            PollCapture();
+            PollGameState();
             status = "脱敏采集已开始";
         }
         catch (Exception exception)
@@ -460,10 +636,12 @@ public sealed class Plugin : IDalamudPlugin
         DisarmController("副本完成：主控已停止并完成清理");
     }
 
-    private void DisarmController(string reason)
+    private void DisarmController(string reason, bool immediateCleanup = false)
     {
         controllerArmed = false;
-        markerProvider.Clear();
+        currentAssignment = null;
+        automationEngine.Reset();
+        activeMarkerProvider.Clear(immediateCleanup);
         status = reason;
     }
 
@@ -515,8 +693,17 @@ public sealed class Plugin : IDalamudPlugin
         _ => $"Job {jobId}",
     };
 
+    private static string MechanicName(ForsakenMechanic mechanic) => mechanic switch
+    {
+        ForsakenMechanic.Fan => "扇形",
+        ForsakenMechanic.Steel => "钢铁",
+        ForsakenMechanic.Share => "分摊",
+        ForsakenMechanic.Idle => "待机",
+        _ => "未知",
+    };
+
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.0";
 
     private static void DrawSectionHeader(string title)
     {
