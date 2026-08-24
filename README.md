@@ -15,6 +15,19 @@ machine, dry-run marker assignments, and a privacy-preserving evidence recorder.
 The plugin never moves the player, simulates input, or executes combat actions.
 Only one user-selected controller may eventually submit real party markers.
 
+## Install with Dalamud
+
+Add the following URL under Dalamud Settings -> Experimental -> Custom Plugin
+Repositories, then search for `VedaMarker` in the plugin installer:
+
+```text
+https://raw.githubusercontent.com/Coptone/VedaMarker/main/pluginmaster.json
+```
+
+The currently published package is the capture/testing build. Real party
+markers, persistent native VFX, and native AoE telegraphs remain disabled until
+their in-game evidence gates pass.
+
 ## Repository layout
 
 ```text

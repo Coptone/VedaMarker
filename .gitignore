@@ -7,5 +7,6 @@ obj/
 TestResults/
 artifacts/
 *.zip
+!repository/*.zip
 *.jsonl
 .env

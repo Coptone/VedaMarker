@@ -1,0 +1,32 @@
+[
+  {
+    "Author": "Coptone",
+    "Name": "VedaMarker",
+    "InternalName": "VedaMarker",
+    "AssemblyVersion": "0.1.0.0",
+    "TestingAssemblyVersion": null,
+    "Punchline": "绝妖星 P2 遗弃末世的职责识别与脱敏采集。",
+    "Description": "VedaMarker 当前为采集/测试版：提供自动职责识别、手动确认、八轮状态 Dry-run 与脱敏证据采集。真实团队标点、原生 VFX 和 AoE Telegraph 尚未启用。",
+    "Changelog": "首次发布采集/测试版；完成职责识别、手动复核、八轮 Dry-run 状态机与脱敏采集。",
+    "ApplicableVersion": "any",
+    "Tags": [
+      "dmu",
+      "marker",
+      "raid",
+      "utility"
+    ],
+    "DalamudApiLevel": 15,
+    "LastUpdate": 1787582322,
+    "LoadRequiredState": 0,
+    "LoadSync": false,
+    "CanUnloadAsync": false,
+    "LoadPriority": 0,
+    "AcceptsFeedback": true,
+    "RepoUrl": "https://github.com/Coptone/VedaMarker",
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/Coptone/VedaMarker/main/repository/VedaMarker.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/Coptone/VedaMarker/main/repository/VedaMarker.zip",
+    "DownloadLinkTesting": null,
+    "IsHide": false,
+    "IsTestingExclusive": false
+  }
+]
