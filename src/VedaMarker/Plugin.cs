@@ -11,9 +11,11 @@ using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
+using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using VedaMarker.Capture;
 using VedaMarker.Core;
+using LuminaAction = Lumina.Excel.Sheets.Action;
 
 namespace VedaMarker;
 
@@ -31,6 +33,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] private static IPartyList PartyList { get; set; } = null!;
     [PluginService] private static IFramework Framework { get; set; } = null!;
     [PluginService] private static IGameInteropProvider Interop { get; set; } = null!;
+    [PluginService] private static IDataManager DataManager { get; set; } = null!;
     [PluginService] private static IPluginLog Log { get; set; } = null!;
 
     private readonly PluginConfiguration configuration;
@@ -39,8 +42,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly DryRunMarkerProvider dryRunMarkerProvider = new();
     private readonly ChatCommandMarkerProvider gameMarkerProvider;
     private readonly CaptureRecorder captureRecorder;
+    private readonly Dictionary<uint, CaptureActionMetadata> actionMetadataCache = [];
     private IMarkerProvider activeMarkerProvider;
     private Hook<ReceiveActionEffectDelegate>? actionEffectHook;
+    private Hook<ApplyMapEffectDelegate>? mapEffectHook;
     private IReadOnlyList<RuntimePartyMember> currentParty = Array.Empty<RuntimePartyMember>();
     private ValidatedMarkerAssignment? currentAssignment;
     private string partySignature = string.Empty;
@@ -54,11 +59,24 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         configuration = PluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
+        var configurationChanged = false;
         if (configuration.Version < 2)
         {
-            configuration.Version = 2;
             configuration.EnableExperimentalPartyMarkers = false;
             configuration.MarkerCommandIntervalMs = 150;
+            configurationChanged = true;
+        }
+
+        if (configuration.Version < 3 || !Enum.IsDefined(configuration.MarkerTargetMode))
+        {
+            configuration.MarkerTargetMode = MarkerTargetMode.SelfOnly;
+            configuration.CustomMarkerRoleMask = 0;
+            configurationChanged = true;
+        }
+
+        if (configurationChanged)
+        {
+            configuration.Version = 3;
             PluginInterface.SavePluginConfig(configuration);
         }
 
@@ -81,6 +99,7 @@ public sealed class Plugin : IDalamudPlugin
 
         RefreshPartyRoles(force: true);
         InstallActionEffectHook();
+        InstallMapEffectHook();
     }
 
     public void Dispose()
@@ -94,6 +113,7 @@ public sealed class Plugin : IDalamudPlugin
             Log.Error(exception, "VedaMarker unload marker cleanup failed");
         }
 
+        mapEffectHook?.Dispose();
         actionEffectHook?.Dispose();
         captureRecorder.Dispose();
         DutyState.DutyCompleted -= OnDutyCompleted;
@@ -131,10 +151,94 @@ public sealed class Plugin : IDalamudPlugin
         ActionEffectHandler.TargetEffects* effects,
         GameObjectId* targetEntityIds)
     {
-        actionEffectHook!.Original(casterEntityId, caster, targetPosition, header, effects, targetEntityIds);
-        if (header != null)
+        CaptureActionMetadata? action = null;
+        CapturePosition? sourcePosition = null;
+        float? sourceRotation = null;
+        CapturePosition? effectTargetPosition = null;
+        float? actionRotation = null;
+        IReadOnlyList<CaptureActionTarget> targets = Array.Empty<CaptureActionTarget>();
+
+        if (captureRecorder.IsActive && header != null)
         {
-            captureRecorder.RecordActionEffect(casterEntityId, header->ActionId);
+            try
+            {
+                action = ResolveActionMetadata(header->ActionId);
+                var source = ObjectTable.SearchByEntityId(casterEntityId);
+                if (source is not null)
+                {
+                    sourcePosition = ToCapturePosition(source.Position);
+                    sourceRotation = source.Rotation;
+                }
+
+                if (targetPosition != null)
+                {
+                    effectTargetPosition = ToCapturePosition(*targetPosition);
+                }
+
+                actionRotation = (header->RotationInt / 65535f * MathF.Tau) - MathF.PI;
+                var targetCount = Math.Min((int)header->NumTargets, 32);
+                var observedTargets = new List<CaptureActionTarget>(targetCount);
+                for (var index = 0; index < targetCount; index++)
+                {
+                    var targetId = targetEntityIds == null ? 0u : targetEntityIds[index].ObjectId;
+                    if (targetId == 0)
+                    {
+                        continue;
+                    }
+
+                    var target = ObjectTable.SearchByEntityId(targetId);
+                    observedTargets.Add(new CaptureActionTarget(
+                        targetId,
+                        target is null ? null : ToCapturePosition(target.Position)));
+                }
+
+                targets = observedTargets;
+            }
+            catch (Exception exception)
+            {
+                Log.Error(exception, "Unable to snapshot VedaMarker ActionEffect capture payload");
+            }
+        }
+
+        actionEffectHook!.Original(casterEntityId, caster, targetPosition, header, effects, targetEntityIds);
+        if (header != null && action is not null)
+        {
+            try
+            {
+                captureRecorder.RecordActionEffect(
+                    casterEntityId,
+                    header->ActionId,
+                    action,
+                    sourcePosition,
+                    sourceRotation,
+                    effectTargetPosition,
+                    actionRotation,
+                    targets);
+            }
+            catch (Exception exception)
+            {
+                Log.Error(exception, "Unable to write VedaMarker ActionEffect capture event");
+            }
+        }
+    }
+
+    private unsafe void OnApplyMapEffect(
+        ContentDirector* director,
+        uint index,
+        ushort state,
+        ushort timelineIndex)
+    {
+        mapEffectHook!.Original(director, index, state, timelineIndex);
+        if (captureRecorder.IsActive)
+        {
+            try
+            {
+                captureRecorder.RecordMapEffect(index, state, timelineIndex, SnapshotRelevantWorldObjects());
+            }
+            catch (Exception exception)
+            {
+                Log.Error(exception, "Unable to write VedaMarker MapEffect capture event");
+            }
         }
     }
 
@@ -178,18 +282,26 @@ public sealed class Plugin : IDalamudPlugin
         PollGameState();
     }
 
-    private void PollGameState()
+    private unsafe void PollGameState()
     {
         try
         {
             var entityRoles = roleCoordinator.Assignments.ToDictionary(
                 entry => entry.Value,
                 entry => entry.Key);
-            var party = currentParty.Select(member => new CapturePartyMember(
-                member.PartyIndex,
-                member.EntityId,
-                member.JobId,
-                roleCoordinator.TryGetRole(member.EntityId, out var role) ? role : null)).ToArray();
+            var party = currentParty.Select(member =>
+            {
+                var gameObject = ObjectTable.SearchByEntityId(member.EntityId);
+                return new CapturePartyMember(
+                    member.PartyIndex,
+                    member.EntityId,
+                    member.JobId,
+                    roleCoordinator.TryGetRole(member.EntityId, out var role) ? role : null,
+                    gameObject is null ? null : ToCapturePosition(gameObject.Position),
+                    gameObject?.Rotation ?? 0,
+                    gameObject?.HitboxRadius ?? 0,
+                    gameObject?.IsDead ?? false);
+            }).ToArray();
 
             var statuses = new List<CaptureStatusObservation>();
             var casts = new List<CaptureCastObservation>();
@@ -227,10 +339,36 @@ public sealed class Plugin : IDalamudPlugin
 
                 if (battleChara.IsCasting && battleChara.CastActionId != 0)
                 {
+                    var targetId = unchecked((uint)battleChara.CastTargetObjectId);
+                    var target = targetId == 0 ? null : ObjectTable.SearchByEntityId(targetId);
+                    CapturePosition? targetLocation = null;
+                    float? castRotation = null;
+                    if (battleChara.Address != 0)
+                    {
+                        var castInfo = ((Character*)battleChara.Address)->GetCastInfo();
+                        if (castInfo != null)
+                        {
+                            targetLocation = new CapturePosition(
+                                castInfo->TargetLocation.X,
+                                castInfo->TargetLocation.Y,
+                                castInfo->TargetLocation.Z);
+                            castRotation = castInfo->Rotation;
+                        }
+                    }
+
                     casts.Add(new CaptureCastObservation(
                         battleChara.EntityId,
                         battleChara.CastActionId,
-                        battleChara.CurrentCastTime));
+                        ResolveActionMetadata(battleChara.CastActionId),
+                        battleChara.CurrentCastTime,
+                        battleChara.TotalCastTime,
+                        ToCapturePosition(battleChara.Position),
+                        battleChara.Rotation,
+                        battleChara.HitboxRadius,
+                        targetId == 0 ? null : targetId,
+                        target is null ? null : ToCapturePosition(target.Position),
+                        targetLocation,
+                        castRotation));
                 }
             }
 
@@ -241,7 +379,8 @@ public sealed class Plugin : IDalamudPlugin
                     Condition[ConditionFlag.InCombat],
                     party,
                     statuses,
-                    casts);
+                    casts,
+                    SnapshotRelevantWorldObjects());
             }
 
             if (controllerArmed)
@@ -255,6 +394,79 @@ public sealed class Plugin : IDalamudPlugin
             Log.Error(exception, "VedaMarker state polling failed");
         }
     }
+
+    private unsafe void InstallMapEffectHook()
+    {
+        try
+        {
+            mapEffectHook = Interop.HookFromAddress<ApplyMapEffectDelegate>(
+                ContentDirector.Addresses.ApplyMapEffect.Value,
+                OnApplyMapEffect);
+            mapEffectHook.Enable();
+            Log.Information("VedaMarker MapEffect capture hook enabled");
+        }
+        catch (Exception exception)
+        {
+            status = "MapEffect 采集钩子未启用；其他采集仍可使用";
+            Log.Error(exception, "Unable to install VedaMarker MapEffect capture hook");
+        }
+    }
+
+    private IReadOnlyList<CaptureObjectObservation> SnapshotRelevantWorldObjects()
+    {
+        var observations = new List<CaptureObjectObservation>();
+        foreach (var gameObject in ObjectTable)
+        {
+            var kind = gameObject.ObjectKind.ToString();
+            if (kind is not ("BattleNpc" or "EventObj" or "AreaObject" or "ReactionEventObject"))
+            {
+                continue;
+            }
+
+            observations.Add(new CaptureObjectObservation(
+                gameObject.ObjectIndex,
+                gameObject.EntityId,
+                gameObject.BaseId,
+                kind,
+                ToCapturePosition(gameObject.Position),
+                gameObject.Rotation,
+                gameObject.HitboxRadius,
+                gameObject.IsDead));
+        }
+
+        return observations;
+    }
+
+    private CaptureActionMetadata ResolveActionMetadata(uint actionId)
+    {
+        if (actionMetadataCache.TryGetValue(actionId, out var cached))
+        {
+            return cached;
+        }
+
+        CaptureActionMetadata metadata;
+        try
+        {
+            var row = DataManager.GetExcelSheet<LuminaAction>().GetRow(actionId);
+            var name = row.Name.ToString();
+            metadata = new CaptureActionMetadata(
+                string.IsNullOrWhiteSpace(name) ? null : name,
+                Convert.ToUInt32(row.CastType),
+                Convert.ToUInt32(row.EffectRange),
+                Convert.ToUInt32(row.XAxisModifier));
+        }
+        catch (Exception exception)
+        {
+            Log.Debug(exception, "Unable to resolve Action sheet row {ActionId}", actionId);
+            metadata = new CaptureActionMetadata(null, null, null, null);
+        }
+
+        actionMetadataCache[actionId] = metadata;
+        return metadata;
+    }
+
+    private static CapturePosition ToCapturePosition(Vector3 position) =>
+        new(position.X, position.Y, position.Z);
 
     private void ProcessForsakenAutomation(IReadOnlyList<ForsakenStatusObservation> statuses)
     {
@@ -273,9 +485,11 @@ public sealed class Plugin : IDalamudPlugin
         if (update.Assignment is not null)
         {
             var localRole = ResolveLocalRole();
-            activeMarkerProvider.Submit(update.Assignment, localRole);
+            var targetRoles = ResolveMarkerTargets(localRole);
+            var partySlots = BuildPartySlots();
+            activeMarkerProvider.Submit(update.Assignment, targetRoles, localRole, partySlots);
             currentAssignment = update.Assignment;
-            status = $"{update.Message}；完整八人逻辑已确认，已按清标→新标顺序提交本人的 {update.Assignment.Markers[localRole]}";
+            status = $"{update.Message}；完整八人逻辑已确认，已对 {string.Join('/', targetRoles)} 按清标→新标顺序提交";
         }
 
         if (update.Completed)
@@ -297,6 +511,30 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return localRole;
+    }
+
+    private IReadOnlyList<RoleSlot> ResolveMarkerTargets(RoleSlot localRole) =>
+        configuration.MarkerTargetMode switch
+        {
+            MarkerTargetMode.SelfOnly => [localRole],
+            MarkerTargetMode.AllRoles => RoleOrder,
+            MarkerTargetMode.CustomRoles => RoleOrder
+                .Where(role => (configuration.CustomMarkerRoleMask & (1 << (int)role)) != 0)
+                .ToArray(),
+            _ => throw new MarkerAssignmentException("标点目标模式无效。"),
+        };
+
+    private IReadOnlyDictionary<RoleSlot, int> BuildPartySlots()
+    {
+        var result = new Dictionary<RoleSlot, int>();
+        foreach (var entry in roleCoordinator.Assignments)
+        {
+            var member = currentParty.SingleOrDefault(candidate => candidate.EntityId == entry.Value)
+                ?? throw new MarkerAssignmentException($"{entry.Key} 对应队员已不在队伍中。");
+            result[entry.Key] = member.PartyIndex + 1;
+        }
+
+        return result;
     }
 
     private void RefreshPartyRoles(bool force)
@@ -371,21 +609,22 @@ public sealed class Plugin : IDalamudPlugin
         ImGui.TextColored(
             controllerArmed ? new Vector4(1f, 0.75f, 0.25f, 1f) : new Vector4(0.55f, 0.9f, 0.55f, 1f),
             controllerArmed ? $"{activeMarkerProvider.Name}主控已手动启动" : "主控未启动");
-        ImGui.TextWrapped("点名与八轮切换已接入完整实战数据；AoE 范围仍关闭，等待位置/方向采集验证。");
+        ImGui.TextWrapped("整场技能与位置/方向采集已扩展；AoE 范围仍关闭，等待日志与录像逐技能验证。");
 
         if (controllerArmed)
         {
             ImGui.BeginDisabled();
         }
         var experimentalMarkers = configuration.EnableExperimentalPartyMarkers;
-        if (ImGui.Checkbox("启用只标本人（实验，默认关闭）", ref experimentalMarkers))
+        if (ImGui.Checkbox("启用真实团队标点（实验，默认关闭）", ref experimentalMarkers))
         {
             configuration.EnableExperimentalPartyMarkers = experimentalMarkers;
             PluginInterface.SavePluginConfig(configuration);
             status = experimentalMarkers
-                ? "本人真实标点已允许；仍需人工确认完整八人职责并手动启动"
+                ? "真实团队标点已允许；请选择目标范围、核对完整八人职责并手动启动"
                 : "已切回 Dry-run 模式";
         }
+        DrawMarkerTargetConfiguration();
         if (controllerArmed)
         {
             ImGui.EndDisabled();
@@ -394,18 +633,21 @@ public sealed class Plugin : IDalamudPlugin
         if (configuration.EnableExperimentalPartyMarkers)
         {
             ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
-                "每位使用者只会清除并标记自己，不会操作其他队员；真实 Party Target Marker 仍对全队可见。 ");
+                "默认只标本人；选择自定义职责或全队后，会实际清除并标记所选队员，且 Party Target Marker 对全队可见。 ");
         }
 
         ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}；待处理命令：{gameMarkerProvider.PendingCommandCount}");
 
-        var canArm = rolesConfirmed && roleCoordinator.Assignments.Count == 8 && !controllerArmed;
+        var canArm = rolesConfirmed
+            && roleCoordinator.Assignments.Count == 8
+            && HasConfiguredMarkerTargets()
+            && !controllerArmed;
         if (!canArm)
         {
             ImGui.BeginDisabled();
         }
         var armButton = configuration.EnableExperimentalPartyMarkers
-            ? "手动启动本人真实标点（实验）"
+            ? "手动启动真实标点（实验）"
             : "手动启动 Dry-run 主控";
         if (ImGui.Button(armButton))
         {
@@ -417,7 +659,7 @@ public sealed class Plugin : IDalamudPlugin
             controllerArmed = true;
             lastCapturePollAt = 0;
             status = configuration.EnableExperimentalPartyMarkers
-                ? "本人真实标点已启动；等待遗弃末世开场八人点名"
+                ? "真实标点已启动；等待遗弃末世开场八人点名"
                 : "Dry-run 主控已启动；等待遗弃末世开场八人点名";
         }
         if (!canArm)
@@ -441,6 +683,70 @@ public sealed class Plugin : IDalamudPlugin
 
         ImGui.TextWrapped(status);
     }
+
+    private void DrawMarkerTargetConfiguration()
+    {
+        var currentLabel = MarkerTargetModeLabel(configuration.MarkerTargetMode);
+        if (ImGui.BeginCombo("标点目标范围", currentLabel))
+        {
+            foreach (var mode in Enum.GetValues<MarkerTargetMode>())
+            {
+                if (ImGui.Selectable(MarkerTargetModeLabel(mode), mode == configuration.MarkerTargetMode))
+                {
+                    configuration.MarkerTargetMode = mode;
+                    PluginInterface.SavePluginConfig(configuration);
+                }
+            }
+
+            ImGui.EndCombo();
+        }
+
+        if (configuration.MarkerTargetMode != MarkerTargetMode.CustomRoles)
+        {
+            return;
+        }
+
+        ImGui.TextWrapped("选择需要由本插件清除并标记的职责：");
+        foreach (var role in RoleOrder)
+        {
+            var selected = (configuration.CustomMarkerRoleMask & (1 << (int)role)) != 0;
+            if (ImGui.Checkbox($"{role}##MarkerTarget-{role}", ref selected))
+            {
+                if (selected)
+                {
+                    configuration.CustomMarkerRoleMask |= 1 << (int)role;
+                }
+                else
+                {
+                    configuration.CustomMarkerRoleMask &= ~(1 << (int)role);
+                }
+
+                PluginInterface.SavePluginConfig(configuration);
+            }
+
+            if (role is not RoleSlot.H2 and not RoleSlot.D4)
+            {
+                ImGui.SameLine();
+            }
+        }
+
+        if (configuration.CustomMarkerRoleMask == 0)
+        {
+            ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f), "至少选择一个职责后才能启动。 ");
+        }
+    }
+
+    private bool HasConfiguredMarkerTargets() =>
+        configuration.MarkerTargetMode != MarkerTargetMode.CustomRoles
+        || configuration.CustomMarkerRoleMask != 0;
+
+    private static string MarkerTargetModeLabel(MarkerTargetMode mode) => mode switch
+    {
+        MarkerTargetMode.SelfOnly => "仅自己（默认）",
+        MarkerTargetMode.CustomRoles => "自定义职责",
+        MarkerTargetMode.AllRoles => "全队八人",
+        _ => "未知",
+    };
 
     private void DrawAutomationPanel()
     {
@@ -558,7 +864,7 @@ public sealed class Plugin : IDalamudPlugin
     private void DrawCapturePanel()
     {
         DrawSectionHeader("采集与诊断");
-        ImGui.TextWrapped("脱敏采集需手动开始，不会上传数据。它只记录 P1/N1 等会话别名、职业/职责、状态、读条和技能事件 ID，不记录角色名、账号/Content ID、服务器或聊天。建议在 P2 转场前开始，记录到团灭或通关后导出 ZIP。");
+        ImGui.TextWrapped("脱敏采集需手动开始，不会上传数据。它会记录整场技能 ID/名称、读条、命中目标、坐标/朝向、MapEffect 和 P1/N1 等会话别名，不记录角色名、账号/Content ID、服务器或聊天。建议进本后立即开始，通关或结束采集时再导出 ZIP。");
         if (!captureRecorder.IsActive)
         {
             if (ImGui.Button("开始脱敏采集"))
@@ -702,7 +1008,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.1";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.2";
 
     private static void DrawSectionHeader(string title)
     {
@@ -721,4 +1027,11 @@ public sealed class Plugin : IDalamudPlugin
         ActionEffectHandler.Header* header,
         ActionEffectHandler.TargetEffects* effects,
         GameObjectId* targetEntityIds);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private unsafe delegate void ApplyMapEffectDelegate(
+        ContentDirector* director,
+        uint index,
+        ushort state,
+        ushort timelineIndex);
 }

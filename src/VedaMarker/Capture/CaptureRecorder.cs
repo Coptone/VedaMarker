@@ -1,22 +1,25 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace VedaMarker.Capture;
 
 internal sealed class CaptureRecorder : IDisposable
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
+    private const long PositionSnapshotIntervalMs = 500;
     private readonly object sync = new();
     private readonly string captureRoot;
     private readonly JsonSerializerOptions jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         WriteIndented = false,
     };
     private readonly Dictionary<uint, string> aliases = [];
     private readonly Dictionary<string, (uint StatusId, uint Param)> activeStatuses = [];
-    private readonly Dictionary<string, uint> activeCasts = [];
+    private readonly Dictionary<string, CaptureCastObservation> activeCasts = [];
     private StreamWriter? eventWriter;
     private DateTimeOffset startedAtUtc;
     private string? sessionDirectory;
@@ -26,6 +29,7 @@ internal sealed class CaptureRecorder : IDisposable
     private uint territoryId;
     private bool? lastCombatState;
     private int nextNonPartyAlias = 1;
+    private long lastPositionSnapshotAt = long.MinValue;
     private long sequence;
 
     public CaptureRecorder(string configDirectory)
@@ -60,6 +64,7 @@ internal sealed class CaptureRecorder : IDisposable
             lastPartySignature = string.Empty;
             lastCombatState = null;
             nextNonPartyAlias = 1;
+            lastPositionSnapshotAt = long.MinValue;
             LastExportPath = null;
 
             var folderName = $"VedaMarker-capture-{startedAtUtc:yyyyMMdd-HHmmss}-{sessionId[..8]}";
@@ -72,7 +77,7 @@ internal sealed class CaptureRecorder : IDisposable
             WriteManifest(null, "active");
             RecordLocked("capture_started", new
             {
-                polling = "party/status/cast/action-effect",
+                polling = "party/status/cast/action-effect/positions/map-effect",
                 privacy = "session-local aliases; no names/content IDs/worlds/chat",
             });
         }
@@ -112,7 +117,8 @@ internal sealed class CaptureRecorder : IDisposable
         bool inCombat,
         IReadOnlyList<CapturePartyMember> party,
         IReadOnlyList<CaptureStatusObservation> statuses,
-        IReadOnlyList<CaptureCastObservation> casts)
+        IReadOnlyList<CaptureCastObservation> casts,
+        IReadOnlyList<CaptureObjectObservation> worldObjects)
     {
         lock (sync)
         {
@@ -138,10 +144,19 @@ internal sealed class CaptureRecorder : IDisposable
             ObserveParty(party);
             ObserveStatuses(statuses);
             ObserveCasts(casts);
+            ObservePositions(party, worldObjects);
         }
     }
 
-    public void RecordActionEffect(uint casterEntityId, uint actionId)
+    public void RecordActionEffect(
+        uint casterEntityId,
+        uint actionId,
+        CaptureActionMetadata action,
+        CapturePosition? sourcePosition,
+        float? sourceRotation,
+        CapturePosition? targetPosition,
+        float? actionRotation,
+        IReadOnlyList<CaptureActionTarget> targets)
     {
         lock (sync)
         {
@@ -154,6 +169,39 @@ internal sealed class CaptureRecorder : IDisposable
             {
                 actor = AliasFor(casterEntityId),
                 actionId,
+                action,
+                sourcePosition,
+                sourceRotation = Round(sourceRotation),
+                targetPosition,
+                actionRotation = Round(actionRotation),
+                targets = targets.Select(target => new
+                {
+                    actor = AliasFor(target.EntityId),
+                    target.Position,
+                }).ToArray(),
+            });
+        }
+    }
+
+    public void RecordMapEffect(
+        uint index,
+        ushort state,
+        ushort timelineIndex,
+        IReadOnlyList<CaptureObjectObservation> worldObjects)
+    {
+        lock (sync)
+        {
+            if (!IsActive)
+            {
+                return;
+            }
+
+            RecordLocked("map_effect", new
+            {
+                index,
+                state,
+                timelineIndex,
+                worldObjects = ProjectWorldObjects(worldObjects),
             });
         }
     }
@@ -224,7 +272,7 @@ internal sealed class CaptureRecorder : IDisposable
                     actor,
                     status.StatusId,
                     status.Param,
-                    remainingTime = Math.Round(status.RemainingTime, 3),
+                    remainingTime = Round(status.RemainingTime),
                 });
             }
         }
@@ -249,19 +297,28 @@ internal sealed class CaptureRecorder : IDisposable
 
     private void ObserveCasts(IReadOnlyList<CaptureCastObservation> casts)
     {
-        var visible = new Dictionary<string, uint>();
+        var visible = new Dictionary<string, CaptureCastObservation>();
         foreach (var cast in casts)
         {
             var actor = AliasFor(cast.ActorEntityId);
             var key = $"{actor}:{cast.ActionId}";
-            visible[key] = cast.ActionId;
+            visible[key] = cast;
             if (!activeCasts.ContainsKey(key))
             {
                 RecordLocked("cast_started", new
                 {
                     actor,
                     cast.ActionId,
-                    currentCastTime = Math.Round(cast.CurrentCastTime, 3),
+                    cast.Action,
+                    currentCastTime = Round(cast.CurrentCastTime),
+                    totalCastTime = Round(cast.TotalCastTime),
+                    cast.SourcePosition,
+                    sourceRotation = Round(cast.SourceRotation),
+                    sourceHitboxRadius = Round(cast.SourceHitboxRadius),
+                    target = cast.TargetEntityId is uint targetId ? AliasFor(targetId) : null,
+                    cast.TargetPosition,
+                    cast.TargetLocation,
+                    castRotation = Round(cast.CastRotation),
                 });
             }
         }
@@ -269,10 +326,12 @@ internal sealed class CaptureRecorder : IDisposable
         foreach (var stale in activeCasts.Keys.Except(visible.Keys).ToArray())
         {
             var separator = stale.IndexOf(':');
+            var cast = activeCasts[stale];
             RecordLocked("cast_ended", new
             {
                 actor = stale[..separator],
-                actionId = activeCasts[stale],
+                cast.ActionId,
+                actionName = cast.Action.Name,
             });
         }
 
@@ -282,6 +341,49 @@ internal sealed class CaptureRecorder : IDisposable
             activeCasts[entry.Key] = entry.Value;
         }
     }
+
+    private void ObservePositions(
+        IReadOnlyList<CapturePartyMember> party,
+        IReadOnlyList<CaptureObjectObservation> worldObjects)
+    {
+        var now = (long)(DateTimeOffset.UtcNow - startedAtUtc).TotalMilliseconds;
+        if (lastPositionSnapshotAt != long.MinValue && now - lastPositionSnapshotAt < PositionSnapshotIntervalMs)
+        {
+            return;
+        }
+
+        lastPositionSnapshotAt = now;
+        RecordLocked("position_snapshot", new
+        {
+            party = party.OrderBy(member => member.PartyIndex).Select(member => new
+            {
+                actor = AliasFor(member.EntityId),
+                member.Position,
+                rotation = Round(member.Rotation),
+                hitboxRadius = Round(member.HitboxRadius),
+                member.IsDead,
+            }).ToArray(),
+            worldObjects = ProjectWorldObjects(worldObjects),
+        });
+    }
+
+    private object[] ProjectWorldObjects(IReadOnlyList<CaptureObjectObservation> worldObjects) =>
+        worldObjects.Select(observation => new
+        {
+            actor = ObjectAliasFor(observation),
+            observation.ObjectIndex,
+            observation.BaseId,
+            observation.ObjectKind,
+            observation.Position,
+            rotation = Round(observation.Rotation),
+            hitboxRadius = Round(observation.HitboxRadius),
+            observation.IsDead,
+        }).Cast<object>().ToArray();
+
+    private string ObjectAliasFor(CaptureObjectObservation observation) =>
+        observation.EntityId is 0 or 0xE0000000
+            ? $"O{observation.ObjectIndex}"
+            : AliasFor(observation.EntityId);
 
     private string AliasFor(uint entityId)
     {
@@ -320,7 +422,7 @@ internal sealed class CaptureRecorder : IDisposable
             startedAtUtc,
             endedAtUtc,
             sequence,
-            "No character names, account/Content IDs, world names, chat, or credentials.",
+            "No character names, account/Content IDs, world names, chat, or credentials. Actor IDs are session-local aliases.",
             stopReason);
         var formattedOptions = new JsonSerializerOptions(jsonOptions) { WriteIndented = true };
         File.WriteAllText(
@@ -328,6 +430,11 @@ internal sealed class CaptureRecorder : IDisposable
             JsonSerializer.Serialize(manifest, formattedOptions),
             new UTF8Encoding(false));
     }
+
+    private static double? Round(float? value) =>
+        value is null ? null : Math.Round(value.Value, 3);
+
+    private static double Round(float value) => Math.Round(value, 3);
 
     private static void AddToArchive(ZipArchive archive, string sourcePath, string entryName)
     {

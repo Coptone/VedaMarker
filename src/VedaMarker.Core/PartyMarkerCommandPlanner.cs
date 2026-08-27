@@ -2,24 +2,29 @@ namespace VedaMarker.Core;
 
 public static class PartyMarkerCommandPlanner
 {
-    public static IReadOnlyList<string> BuildSelfAssignmentCommands(
+    public static IReadOnlyList<string> BuildAssignmentCommands(
         ValidatedMarkerAssignment assignment,
-        RoleSlot localRole)
+        IReadOnlyCollection<RoleSlot> targetRoles,
+        RoleSlot localRole,
+        IReadOnlyDictionary<RoleSlot, int> partySlots)
     {
         ValidateCompleteAssignment(assignment);
-        if (!Enum.IsDefined(localRole) || !assignment.Markers.TryGetValue(localRole, out var marker))
-        {
-            throw new MarkerAssignmentException("无法从完整职责中识别插件使用者本人。");
-        }
-
-        return
-        [
-            "/mk off <me>",
-            $"/mk {CommandName(marker)} <me>",
-        ];
+        var targets = ValidateTargets(targetRoles, localRole, partySlots);
+        var commands = new List<string>(targets.Length * 2);
+        commands.AddRange(targets.Select(role => $"/mk off {TargetReference(role, localRole, partySlots)}"));
+        commands.AddRange(targets.Select(role =>
+            $"/mk {CommandName(assignment.Markers[role])} {TargetReference(role, localRole, partySlots)}"));
+        return commands;
     }
 
-    public static IReadOnlyList<string> BuildSelfClearCommands() => ["/mk off <me>"];
+    public static IReadOnlyList<string> BuildClearCommands(
+        IReadOnlyCollection<RoleSlot> targetRoles,
+        RoleSlot localRole,
+        IReadOnlyDictionary<RoleSlot, int> partySlots)
+    {
+        var targets = ValidateTargets(targetRoles, localRole, partySlots);
+        return targets.Select(role => $"/mk off {TargetReference(role, localRole, partySlots)}").ToArray();
+    }
 
     private static void ValidateCompleteAssignment(ValidatedMarkerAssignment assignment)
     {
@@ -31,6 +36,40 @@ public static class PartyMarkerCommandPlanner
             throw new MarkerAssignmentException("标点提交器拒绝不完整或重复的标点集合。");
         }
     }
+
+    private static RoleSlot[] ValidateTargets(
+        IReadOnlyCollection<RoleSlot> targetRoles,
+        RoleSlot localRole,
+        IReadOnlyDictionary<RoleSlot, int> partySlots)
+    {
+        var roles = Enum.GetValues<RoleSlot>();
+        if (!Enum.IsDefined(localRole))
+        {
+            throw new MarkerAssignmentException("无法识别插件使用者本人的职责。");
+        }
+
+        var targets = targetRoles.Distinct().OrderBy(role => role).ToArray();
+        if (targets.Length == 0 || targets.Any(role => !Enum.IsDefined(role)))
+        {
+            throw new MarkerAssignmentException("至少需要选择一个有效的标点目标职责。");
+        }
+
+        if (partySlots.Count != roles.Length
+            || roles.Any(role => !partySlots.ContainsKey(role))
+            || partySlots.Values.Any(slot => slot is < 1 or > 8)
+            || partySlots.Values.Distinct().Count() != roles.Length)
+        {
+            throw new MarkerAssignmentException("标点提交器拒绝不完整、重复或越界的队伍序号。");
+        }
+
+        return targets;
+    }
+
+    private static string TargetReference(
+        RoleSlot role,
+        RoleSlot localRole,
+        IReadOnlyDictionary<RoleSlot, int> partySlots) =>
+        role == localRole ? "<me>" : $"<{partySlots[role]}>";
 
     private static string CommandName(PartyMarker marker) => marker switch
     {

@@ -6,8 +6,8 @@ The combat path is local and deterministic. It consumes observed game events,
 normalizes them, advances the Forsaken state machine, validates a complete set of
 eight assignments, resolves the local user's role, and then calls an
 `IMarkerProvider`. Dry-run remains the default. The experimental real-marker
-provider may only clear and mark `<me>`; VFX and telegraph providers remain
-separate PoCs.
+provider defaults to `<me>` and may be explicitly configured for selected roles
+or all eight party members; VFX and telegraph providers remain separate PoCs.
 
 ```text
 Dalamud observations
@@ -16,13 +16,13 @@ Dalamud observations
   -> MarkerAssignmentResolver
   -> CompleteAssignmentValidator
   -> DryRunMarkerProvider (default)
-  -> ChatCommandMarkerProvider (experimental, manually armed, self-only)
+  -> ChatCommandMarkerProvider (experimental, manually armed, configurable target scope)
 ```
 
-For every new wave, the self-only provider queues exactly two operations: clear
-the local user's current marker, then apply the local user's new marker from the
-validated eight-person assignment. Completion, wipe, zone change, disarm, and
-unload only clear the local user.
+For every new wave, the provider first queues clears for every selected target,
+then queues new markers for every selected target from the validated eight-person
+assignment. Completion, wipe, zone change, disarm, and unload clear the most
+recently selected target set. Self-only remains the default.
 
 ## Role inference
 
@@ -36,8 +36,15 @@ unload only clear the local user.
 
 ## Evidence flow
 
-The recorder is started and exported manually; it never uploads data. It writes
-a versioned JSONL stream with session-local actor aliases.
-It records territory/combat transitions, party jobs, status changes, cast starts
-and ends, and observed ActionEffect IDs. It never writes character names,
-Content IDs, account IDs, or world names.
+The recorder is started and exported manually; it never uploads data. Schema v2
+writes a versioned JSONL stream with session-local actor aliases. During the whole
+duty it records territory/combat transitions, party jobs, status changes, cast
+starts/ends, localized action names when available, action-sheet shape candidates,
+source/target/ground positions, rotations, hitboxes, ActionEffect targets,
+MapEffect events, and periodic party/relevant-world-object snapshots. It never
+writes character names, Content IDs, account IDs, world names, or chat.
+
+Action-sheet shape fields are candidates, not proof that every observed skill is
+a native telegraph. Rendering remains evidence-gated per action because scripted
+geometry, delayed effects, arena transforms, and client VFX can differ from the
+static sheet row.

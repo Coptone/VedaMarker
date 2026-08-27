@@ -12,7 +12,9 @@ internal interface IMarkerProvider
 
     void Submit(
         ValidatedMarkerAssignment assignment,
-        RoleSlot localRole);
+        IReadOnlyCollection<RoleSlot> targetRoles,
+        RoleSlot localRole,
+        IReadOnlyDictionary<RoleSlot, int> partySlots);
 
     void Tick(long now);
 
@@ -31,9 +33,15 @@ internal sealed class DryRunMarkerProvider : IMarkerProvider
 
     public void Submit(
         ValidatedMarkerAssignment assignment,
-        RoleSlot localRole)
+        IReadOnlyCollection<RoleSlot> targetRoles,
+        RoleSlot localRole,
+        IReadOnlyDictionary<RoleSlot, int> partySlots)
     {
-        _ = PartyMarkerCommandPlanner.BuildSelfAssignmentCommands(assignment, localRole);
+        _ = PartyMarkerCommandPlanner.BuildAssignmentCommands(
+            assignment,
+            targetRoles,
+            localRole,
+            partySlots);
         LastAssignment = assignment;
     }
 

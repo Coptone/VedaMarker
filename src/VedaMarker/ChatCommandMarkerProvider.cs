@@ -7,25 +7,15 @@ namespace VedaMarker;
 
 internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) : IMarkerProvider
 {
-    private static readonly HashSet<string> AllowedSelfCommands = new(StringComparer.Ordinal)
-    {
-        "/mk off <me>",
-        "/mk attack1 <me>",
-        "/mk attack2 <me>",
-        "/mk attack3 <me>",
-        "/mk attack4 <me>",
-        "/mk bind1 <me>",
-        "/mk bind2 <me>",
-        "/mk stop1 <me>",
-        "/mk stop2 <me>",
-    };
+    private static readonly HashSet<string> AllowedCommands = BuildAllowedCommands();
 
     private readonly Queue<string> pendingCommands = new();
     private long lastCommandAt;
     private bool hasSubmittedMarkers;
     private bool cleanupScheduled;
+    private IReadOnlyList<string> lastClearCommands = Array.Empty<string>();
 
-    public string Name => "本人团队标点（实验）";
+    public string Name => "可选目标团队标点（实验）";
 
     public bool ProducesGameMarkers => true;
 
@@ -33,9 +23,19 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
 
     public void Submit(
         ValidatedMarkerAssignment assignment,
-        RoleSlot localRole)
+        IReadOnlyCollection<RoleSlot> targetRoles,
+        RoleSlot localRole,
+        IReadOnlyDictionary<RoleSlot, int> partySlots)
     {
-        var commands = PartyMarkerCommandPlanner.BuildSelfAssignmentCommands(assignment, localRole);
+        var commands = PartyMarkerCommandPlanner.BuildAssignmentCommands(
+            assignment,
+            targetRoles,
+            localRole,
+            partySlots);
+        lastClearCommands = PartyMarkerCommandPlanner.BuildClearCommands(
+            targetRoles,
+            localRole,
+            partySlots);
         pendingCommands.Clear();
         cleanupScheduled = false;
         foreach (var command in commands)
@@ -66,6 +66,7 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
         {
             cleanupScheduled = false;
             hasSubmittedMarkers = false;
+            lastClearCommands = Array.Empty<string>();
         }
     }
 
@@ -78,7 +79,7 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
         }
 
         cleanupScheduled = false;
-        var commands = PartyMarkerCommandPlanner.BuildSelfClearCommands();
+        var commands = lastClearCommands;
         if (immediate)
         {
             Exception? firstFailure = null;
@@ -96,6 +97,7 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
 
             lastCommandAt = 0;
             hasSubmittedMarkers = false;
+            lastClearCommands = Array.Empty<string>();
             if (firstFailure is not null)
             {
                 throw new InvalidOperationException("插件卸载时未能完成全部标点清理命令。", firstFailure);
@@ -114,9 +116,9 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
 
     private static unsafe void ExecuteCommand(string command)
     {
-        if (!AllowedSelfCommands.Contains(command))
+        if (!AllowedCommands.Contains(command))
         {
-            throw new InvalidOperationException("拒绝执行本人标点白名单之外的命令。");
+            throw new InvalidOperationException("拒绝执行标点白名单之外的命令。");
         }
 
         var bytes = Encoding.UTF8.GetBytes(command);
@@ -129,5 +131,13 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
         {
             message->Dtor(true);
         }
+    }
+
+    private static HashSet<string> BuildAllowedCommands()
+    {
+        string[] markers = ["off", "attack1", "attack2", "attack3", "attack4", "bind1", "bind2", "stop1", "stop2"];
+        string[] targets = ["<me>", "<1>", "<2>", "<3>", "<4>", "<5>", "<6>", "<7>", "<8>"];
+        return markers.SelectMany(marker => targets.Select(target => $"/mk {marker} {target}"))
+            .ToHashSet(StringComparer.Ordinal);
     }
 }

@@ -3,25 +3,28 @@
 VedaMarker is a standalone Dalamud plugin for the DMU P2 **Forsaken** encounter.
 The current testing milestone provides deterministic role inference, automatic
 eight-wave status recognition, dry-run marker assignments, an opt-in experimental
-self-only Party Marker queue, and a privacy-preserving evidence recorder.
+configurable Party Marker queue, and a privacy-preserving whole-duty evidence recorder.
 
 ## Current status
 
 - P0 scaffold, manual controller, and redacted capture workflow: implemented and captured in game
 - P1 role inference, Forsaken state machine, automatic wave recognition, and marker rules: implemented and unit tested
-- Real party target markers: opt-in self-only experimental provider; disabled by default pending an in-game submission/cleanup PoC
+- Real party target markers: opt-in experimental provider with self-only (default), selected-role, and full-party modes; disabled by default pending an in-game submission/cleanup PoC
 - Persistent native VFX: blocked on captured resource evidence
 - Native AoE telegraphs: blocked on per-mechanic validation
 
 The plugin never moves the player, simulates input, or executes combat actions.
 Real party markers require manual role confirmation, an explicit experimental
 toggle, and manual controller arming. Each plugin instance computes the complete
-eight-person assignment, then clears and marks only its own local player at the
-start of every wave. It never clears or marks another party member.
+eight-person assignment. At the start of every wave it first clears every selected
+target, then applies every selected target's new marker. The default selection is
+the local player; selected-role and full-party modes require an explicit choice.
 
 The built-in redacted recorder is started manually and never uploads data. It
-exports a local ZIP containing session aliases, jobs/roles, statuses, casts, and
-action IDs, without character names, account/Content IDs, worlds, or chat.
+exports a schema-v2 local ZIP containing session aliases, jobs/roles, statuses,
+all observed cast and ActionEffect IDs with localized names when available,
+positions/rotations/hitboxes, target locations, map effects, and periodic world
+snapshots, without character names, account/Content IDs, worlds, or chat.
 
 ## Install with Dalamud
 
@@ -32,8 +35,8 @@ Repositories, then search for `VedaMarker` in the plugin installer:
 https://raw.githubusercontent.com/Coptone/VedaMarker/main/pluginmaster.json
 ```
 
-The published package is a testing build. Experimental self-only real party
-markers are disabled by default; persistent native VFX and native AoE
+The published package is a testing build. Experimental real party markers are
+disabled by default and default to self-only when enabled; persistent native VFX and native AoE
 telegraphs remain unavailable until their separate in-game evidence gates pass.
 
 ## Repository layout
