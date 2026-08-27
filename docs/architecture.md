@@ -19,6 +19,13 @@ Dalamud observations
   -> ChatCommandMarkerProvider (experimental, manually armed, configurable target scope)
 ```
 
+The cross-duty simulator bypasses encounter observations but not assignment or
+safety validation. `ForsakenSimulationAssignmentFactory` supplies a complete
+synthetic odd/even mechanic snapshot to the production `MarkerAssignmentResolver`;
+the resulting eight-marker assignment then follows the same target selection,
+clear-before-mark queue, provider, and cleanup path as a real wave. The user
+must arm it and submit every wave manually.
+
 For every new wave, the provider first queues clears for every selected target,
 then queues new markers for every selected target from the validated eight-person
 assignment. Completion, wipe, zone change, disarm, and unload clear the most
@@ -29,8 +36,8 @@ are resolved through the current client's `TextCommandParam` rows before
 submission, while cleanup is submitted unchanged as `/mk clear <target>`.
 Any transition between a clear phase and a marker phase in
 either direction is separated by at least 650 ms; commands inside one phase use
-the configured queue interval. The provider records the last submitted localized command. A
-manual diagnostic walks through all eight marker types on the local player,
+the configured queue interval. The provider records the last submitted
+localized command. A manual diagnostic walks through all eight marker types on the local player,
 reads each result from `MarkingController`, clears it, verifies the empty state,
 and reports each mark/clear pair separately. The diagnostic and encounter
 controller cannot run at the same time.

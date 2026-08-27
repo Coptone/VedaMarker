@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-08-27
+Last updated: 2026-08-28
 
 ## Confirmed decisions
 
@@ -25,9 +25,11 @@ Last updated: 2026-08-27
 - [x] P0 in-game capture: encounter/phase/wave evidence
 - [x] P1 automatic status-to-wave recognition and complete configurable-target marker queue
 - [x] P1 marker command parameter correction, client-localized submission, and all-marker self-test UI
+- [x] P1 manually armed cross-duty eight-wave marker simulator using the production assignment/provider path
 - [x] P0 schema-v2 whole-duty capture implementation and privacy/export test
 - [ ] P0 in-game validation: schema-v2 action names/IDs, spatial observations, ActionEffect targets, and MapEffect events
-- [ ] P0 in-game revalidation: all eight real Party Target Markers and clears through the 0.2.6 diagnostic
+- [ ] P0 in-game revalidation: all eight real Party Target Markers and clears through the 0.2.7 diagnostic/simulator
+- [ ] P0 in-game O8S validation: manually submit eight simulated waves and confirm stop/cleanup
 - [ ] P1 in-game PoC: persistent point-name VFX
 - [ ] P1 per-mechanic native telegraph validation
 
@@ -35,7 +37,7 @@ Items requiring game evidence remain unchecked even when the code builds.
 
 ## Verification
 
-- Core rules, automatic capture replay, selected-target clear-before-mark ordering, all-eight diagnostic commands, and ignore-parameter regression: 22 tests passed on .NET 10.
+- Core rules, automatic capture replay, selected-target clear-before-mark ordering, all-eight diagnostic commands, simulation assignments, and ignore-parameter regression: 25 tests passed on .NET 10.
 - Capture privacy/export: 1 test passed; schema-v2 ZIP contains only versioned manifest and JSONL.
 - Dalamud API 15 Release build: 0 warnings, 0 errors against the official staging development files.
 - Full in-game Forsaken status sequence is documented under `docs/evidence/`.

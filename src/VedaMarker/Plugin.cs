@@ -89,6 +89,8 @@ public sealed class Plugin : IDalamudPlugin
     private MarkerDiagnosticPhase markerDiagnosticPhase;
     private long markerDiagnosticObservationDeadline;
     private string markerDiagnosticSummary = "全部标点与清除尚未测试";
+    private bool simulationArmed;
+    private int simulationWave;
 
     public Plugin()
     {
@@ -297,6 +299,8 @@ public sealed class Plugin : IDalamudPlugin
         catch (Exception exception)
         {
             controllerArmed = false;
+            simulationArmed = false;
+            simulationWave = 0;
             markerDiagnosticRunning = false;
             markerDiagnosticSummary = "测试中断：游戏标点命令提交失败";
             automationEngine.Reset();
@@ -804,6 +808,7 @@ public sealed class Plugin : IDalamudPlugin
 
         DrawSafetyPanel();
         DrawRolePanel();
+        DrawSimulationPanel();
         DrawAutomationPanel();
         DrawCapturePanel();
         ImGui.End();
@@ -812,12 +817,18 @@ public sealed class Plugin : IDalamudPlugin
     private void DrawSafetyPanel()
     {
         DrawSectionHeader("主控状态");
+        var anyControllerArmed = controllerArmed || simulationArmed;
+        var controllerStatus = simulationArmed
+            ? $"{activeMarkerProvider.Name}模拟测试已手动启动（Wave {simulationWave}/8）"
+            : controllerArmed
+                ? $"{activeMarkerProvider.Name}主控已手动启动"
+                : "主控未启动";
         ImGui.TextColored(
-            controllerArmed ? new Vector4(1f, 0.75f, 0.25f, 1f) : new Vector4(0.55f, 0.9f, 0.55f, 1f),
-            controllerArmed ? $"{activeMarkerProvider.Name}主控已手动启动" : "主控未启动");
+            anyControllerArmed ? new Vector4(1f, 0.75f, 0.25f, 1f) : new Vector4(0.55f, 0.9f, 0.55f, 1f),
+            controllerStatus);
         ImGui.TextWrapped("整场技能与位置/方向采集已扩展；AoE 范围仍关闭，等待日志与录像逐技能验证。");
 
-        var safetyControlsLocked = controllerArmed || markerDiagnosticRunning;
+        var safetyControlsLocked = anyControllerArmed || markerDiagnosticRunning;
         if (safetyControlsLocked)
         {
             ImGui.BeginDisabled();
@@ -847,7 +858,7 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
                 "默认只标本人；选择自定义职责或全队后，会实际清除并标记所选队员，且 Party Target Marker 对全队可见。 ");
             ImGui.TextWrapped("一键自检会依次真实标记本人并逐个清除，标点对全队可见；建议在进机制前测试：");
-            if (controllerArmed || markerDiagnosticRunning)
+            if (anyControllerArmed || markerDiagnosticRunning)
             {
                 ImGui.BeginDisabled();
             }
@@ -865,7 +876,7 @@ public sealed class Plugin : IDalamudPlugin
                 status = "已排队清除本人测试标点";
             }
 
-            if (controllerArmed || markerDiagnosticRunning)
+            if (anyControllerArmed || markerDiagnosticRunning)
             {
                 ImGui.EndDisabled();
             }
@@ -910,6 +921,7 @@ public sealed class Plugin : IDalamudPlugin
             && roleCoordinator.Assignments.Count == 8
             && HasConfiguredMarkerTargets()
             && !markerDiagnosticRunning
+            && !simulationArmed
             && !controllerArmed;
         if (!canArm)
         {
@@ -937,15 +949,15 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         ImGui.SameLine();
-        if (!controllerArmed)
+        if (!anyControllerArmed)
         {
             ImGui.BeginDisabled();
         }
         if (ImGui.Button("停止并清理"))
         {
-            DisarmController("用户手动停止主控");
+            DisarmController(simulationArmed ? "模拟测试已停止并提交清理" : "用户手动停止主控");
         }
-        if (!controllerArmed)
+        if (!anyControllerArmed)
         {
             ImGui.EndDisabled();
         }
@@ -1016,6 +1028,139 @@ public sealed class Plugin : IDalamudPlugin
         MarkerTargetMode.AllRoles => "全队八人",
         _ => "未知",
     };
+
+    private void DrawSimulationPanel()
+    {
+        DrawSectionHeader("跨副本模拟测试（O8S 可用）");
+        ImGui.TextWrapped(
+            "模拟测试不读取当前副本机制，只用正式奇偶轮分配器生成完整八人标点。每轮必须手动提交，并按正式流程先清标再标；不会执行移动或战斗操作。");
+
+        if (!simulationArmed)
+        {
+            var canStart = rolesConfirmed
+                && roleCoordinator.Assignments.Count == 8
+                && HasConfiguredMarkerTargets()
+                && !controllerArmed
+                && !markerDiagnosticRunning;
+            if (!canStart)
+            {
+                ImGui.BeginDisabled();
+            }
+
+            var label = configuration.EnableExperimentalPartyMarkers
+                ? "手动启动模拟测试（真实标点）"
+                : "手动启动模拟测试（Dry-run）";
+            if (ImGui.Button(label))
+            {
+                automationEngine.Reset();
+                currentAssignment = null;
+                activeMarkerProvider = configuration.EnableExperimentalPartyMarkers
+                    ? gameMarkerProvider
+                    : dryRunMarkerProvider;
+                simulationArmed = true;
+                simulationWave = 0;
+                status = "模拟测试已启动；请手动提交模拟第1轮";
+            }
+
+            if (!canStart)
+            {
+                ImGui.EndDisabled();
+            }
+
+            if (!rolesConfirmed || roleCoordinator.Assignments.Count != 8)
+            {
+                ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
+                    "需要在完整八人队伍中确认职责后才能启动模拟测试。");
+            }
+
+            return;
+        }
+
+        var commandsPending = activeMarkerProvider.ProducesGameMarkers
+            && gameMarkerProvider.PendingCommandCount != 0;
+        var canSubmitNext = simulationWave < 8 && !commandsPending;
+        if (!canSubmitNext)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Button(simulationWave < 8
+                ? $"提交模拟第 {simulationWave + 1} 轮"
+                : "八轮已全部提交"))
+        {
+            SubmitNextSimulationWave();
+        }
+
+        if (!canSubmitNext)
+        {
+            ImGui.EndDisabled();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("结束模拟并清理"))
+        {
+            DisarmController("模拟测试已结束并提交清理");
+            return;
+        }
+
+        ImGui.TextWrapped(commandsPending
+            ? $"模拟 Wave {simulationWave}/8：正在执行清标→新标队列"
+            : simulationWave == 8
+                ? "模拟八轮已全部提交；观察完成后请点击结束模拟并清理"
+                : $"模拟 Wave {simulationWave}/8：可手动提交下一轮");
+
+        if (currentAssignment is null)
+        {
+            return;
+        }
+
+        if (ImGui.BeginTable("SimulationAssignment", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        {
+            ImGui.TableSetupColumn("职责");
+            ImGui.TableSetupColumn("模拟标点");
+            ImGui.TableHeadersRow();
+            foreach (var role in RoleOrder)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(role.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(MarkerDisplayName(currentAssignment.Markers[role]));
+            }
+
+            ImGui.EndTable();
+        }
+    }
+
+    private void SubmitNextSimulationWave()
+    {
+        try
+        {
+            if (!simulationArmed || simulationWave >= 8)
+            {
+                throw new MarkerAssignmentException("模拟测试尚未启动或八轮已经完成。");
+            }
+
+            if (activeMarkerProvider.ProducesGameMarkers && gameMarkerProvider.PendingCommandCount != 0)
+            {
+                throw new MarkerAssignmentException("上一轮标点命令仍在处理中。");
+            }
+
+            var wave = simulationWave + 1;
+            var assignment = ForsakenSimulationAssignmentFactory.Create(wave);
+            var localRole = ResolveLocalRole();
+            var targetRoles = ResolveMarkerTargets(localRole);
+            activeMarkerProvider.Submit(assignment, targetRoles, localRole, BuildPartySlots());
+            simulationWave = wave;
+            currentAssignment = assignment;
+            status = $"模拟第 {wave} 轮已按清标→新标顺序提交到 {string.Join('/', targetRoles)}";
+        }
+        catch (Exception exception)
+        {
+            DisarmController("模拟测试提交失败，已停止并尝试清理");
+            Log.Error(exception, "VedaMarker simulation marker submission failed");
+        }
+    }
 
     private void DrawAutomationPanel()
     {
@@ -1217,6 +1362,8 @@ public sealed class Plugin : IDalamudPlugin
     {
         StopMarkerDiagnostic(reason, immediateCleanup);
         controllerArmed = false;
+        simulationArmed = false;
+        simulationWave = 0;
         currentAssignment = null;
         automationEngine.Reset();
         activeMarkerProvider.Clear(immediateCleanup);
@@ -1294,7 +1441,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.6";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.7";
 
     private enum MarkerDiagnosticPhase
     {
