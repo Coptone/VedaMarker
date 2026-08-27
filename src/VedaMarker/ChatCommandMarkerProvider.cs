@@ -9,7 +9,7 @@ internal sealed class ChatCommandMarkerProvider(
     Func<int> intervalMilliseconds,
     Func<string, string> translateCommand) : IMarkerProvider
 {
-    private const int ClearToMarkDelayMs = 650;
+    private const int MarkerPhaseTransitionDelayMs = 650;
     private static readonly HashSet<string> AllowedCommands = BuildAllowedCommands();
 
     private readonly Queue<string> pendingCommands = new();
@@ -81,9 +81,9 @@ internal sealed class ChatCommandMarkerProvider(
 
         var nextIsClear = IsClearCommand(pendingCommands.Peek());
         var interval = Math.Clamp(intervalMilliseconds(), 100, 1000);
-        if (lastCommandWasClear && !nextIsClear)
+        if (lastCommandWasClear != nextIsClear)
         {
-            interval = Math.Max(interval, ClearToMarkDelayMs);
+            interval = Math.Max(interval, MarkerPhaseTransitionDelayMs);
         }
 
         if (lastCommandAt != 0 && now - lastCommandAt < interval)

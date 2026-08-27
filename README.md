@@ -15,7 +15,10 @@ configurable Party Marker queue, and a privacy-preserving whole-duty evidence re
 
 The plugin never moves the player, simulates input, or executes combat actions.
 Real party markers require manual role confirmation, an explicit experimental
-toggle, and manual controller arming. Each plugin instance computes the complete
+toggle, and manual controller arming. Role confirmation is retained across wipes
+and duty recommences within the same instance; the controller still stops and
+must be manually restarted. Leaving the instance or an actual party-composition
+change resets confirmation. Each plugin instance computes the complete
 eight-person assignment. At the start of every wave it first clears every selected
 target, then applies every selected target's new marker. The default selection is
 the local player; selected-role and full-party modes require an explicit choice.
@@ -25,6 +28,10 @@ types on the local player. For each type it reads the game's marker state,
 clears the marker, reads the cleared state, and displays the per-item result.
 It also shows the currently observed local marker and the most recently
 submitted localized command.
+
+Transitions in either direction between marking and clearing wait at least
+650 ms. Commands within the same clear phase or marker phase continue to use
+the configured queue interval.
 
 The built-in redacted recorder is started manually and never uploads data. It
 exports a schema-v2 local ZIP containing session aliases, jobs/roles, statuses,

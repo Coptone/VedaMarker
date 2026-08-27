@@ -3,11 +3,11 @@
     "Author": "Coptone",
     "Name": "VedaMarker",
     "InternalName": "VedaMarker",
-    "AssemblyVersion": "0.2.4.0",
+    "AssemblyVersion": "0.2.5.0",
     "TestingAssemblyVersion": null,
     "Punchline": "绝妖星 P2 遗弃末世自动点名与可选目标标点。",
-    "Description": "VedaMarker 0.2.4 测试版：真实标点使用客户端本地化参数，并可一键验证本人全部8种标点及逐个清除。标点默认仅自己，也可选择职责或全队；AOE/VFX 尚未启用。",
-    "Changelog": "新增一键测试全部8种团队标点与清除：依次标记本人、读取游戏内实际标记、逐个清除并回读，最后显示每项成功或失败；测试与机制主控互斥，并保留停止测试与清除按钮。",
+    "Description": "VedaMarker 0.2.5 测试版：一键验证本人全部8种标点及逐个清除，并修复测试清除过快的问题。职责确认在本次副本内持续有效；AOE/VFX 尚未启用。",
+    "Changelog": "标记与清除两个阶段切换时统一至少等待650ms，避免清除紧跟标记而被游戏拒绝；团灭和副本重新开始后保留职责确认，只停止并清理主控，退出副本或队伍构成变化时才要求重新确认。",
     "ApplicableVersion": "any",
     "Tags": [
       "dmu",
@@ -16,7 +16,7 @@
       "utility"
     ],
     "DalamudApiLevel": 15,
-    "LastUpdate": 1787844060,
+    "LastUpdate": 1787845712,
     "LoadRequiredState": 0,
     "LoadSync": false,
     "CanUnloadAsync": false,

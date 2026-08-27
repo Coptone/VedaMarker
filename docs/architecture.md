@@ -26,12 +26,18 @@ recently selected target set. Self-only remains the default.
 
 Canonical commands are validated against a fixed whitelist, then marker
 parameters are resolved through the current client's `TextCommandParam` rows
-before submission. The clear phase and new-marker phase are separated by at
-least 650 ms. The provider records the last submitted localized command. A
+before submission. Any transition between a clear phase and a marker phase in
+either direction is separated by at least 650 ms; commands inside one phase use
+the configured queue interval. The provider records the last submitted localized command. A
 manual diagnostic walks through all eight marker types on the local player,
 reads each result from `MarkingController`, clears it, verifies the empty state,
 and reports each mark/clear pair separately. The diagnostic and encounter
 controller cannot run at the same time.
+
+Role confirmation is scoped to the current instance. A wipe or duty recommence
+disarms the controller and queues cleanup but retains confirmation; leaving the
+territory or observing a real party-composition change resets it. Every pull
+still requires the user to manually arm the controller.
 
 ## Role inference
 

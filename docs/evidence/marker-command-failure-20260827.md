@@ -26,5 +26,14 @@ covering Attack 1-4, Bind 1-2, and Ignore 1-2. Each marker must be observed in
 `MarkingController`, then the matching clear must be observed before the next
 marker begins. The UI records a separate mark/clear result for all eight types.
 
-The PoC may be checked only after the owner confirms that the 0.2.4 diagnostic
+The PoC may be checked only after the owner confirms that the current diagnostic
 reports all eight mark/clear pairs as successful in the game client.
+
+## 0.2.4 clear failure report
+
+The owner subsequently reported that clearing appeared ineffective. The
+diagnostic was waiting at least 650 ms from clear to the next marker, but only
+the configured 150 ms from a marker to its clear command. Version 0.2.5 applies
+the 650 ms minimum to both phase transitions while retaining the shorter
+same-phase queue interval. This is a hypothesis-driven correction and does not
+close the PoC until the owner reruns the in-game diagnostic successfully.

@@ -1190,14 +1190,17 @@ public sealed class Plugin : IDalamudPlugin
     private void OnDutyWiped(IDutyStateEventArgs args)
     {
         captureRecorder.RecordLifecycle("duty_wiped");
-        DisarmController("团灭：主控已停止并完成清理");
+        DisarmController(rolesConfirmed
+            ? "团灭：主控已停止并完成清理；本次副本的职责确认已保留，请手动重新启动"
+            : "团灭：主控已停止并完成清理");
     }
 
     private void OnDutyRecommenced(IDutyStateEventArgs args)
     {
         captureRecorder.RecordLifecycle("duty_recommenced");
-        DisarmController("副本重新开始：请重新核对并手动启动主控");
-        rolesConfirmed = false;
+        DisarmController(rolesConfirmed
+            ? "副本重新开始：本次副本的职责确认已保留，请手动重新启动主控"
+            : "副本重新开始：请核对职责并手动启动主控");
     }
 
     private void OnDutyCompleted(IDutyStateEventArgs args)
@@ -1287,7 +1290,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.4";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.5";
 
     private enum MarkerDiagnosticPhase
     {
