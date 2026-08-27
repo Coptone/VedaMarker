@@ -7,7 +7,7 @@ party target markers, local persistent native VFX, and validated local native
 telegraphs. It is intentionally separate from VedaAxis.
 
 - Never move, press keys, simulate input, or execute combat actions.
-- Real party markers may only run after the user manually arms one controller.
+- Real party markers may only run after each local user manually arms their self-only controller.
 - Never submit a partial marker set when all eight responsibilities are unknown.
 - Persistent VFX and telegraphs are local-only and must never block marker cleanup.
 - Do not add ACT, Triggernometry, PostNamazu, or a network service dependency.

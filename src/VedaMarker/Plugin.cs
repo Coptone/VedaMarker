@@ -272,10 +272,10 @@ public sealed class Plugin : IDalamudPlugin
 
         if (update.Assignment is not null)
         {
-            var partySlots = BuildPartySlots();
-            activeMarkerProvider.Submit(update.Assignment, partySlots);
+            var localRole = ResolveLocalRole();
+            activeMarkerProvider.Submit(update.Assignment, localRole);
             currentAssignment = update.Assignment;
-            status = $"{update.Message}；已向 {activeMarkerProvider.Name} 提交完整八人标点";
+            status = $"{update.Message}；完整八人逻辑已确认，已按清标→新标顺序提交本人的 {update.Assignment.Markers[localRole]}";
         }
 
         if (update.Completed)
@@ -287,17 +287,16 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    private IReadOnlyDictionary<RoleSlot, int> BuildPartySlots()
+    private RoleSlot ResolveLocalRole()
     {
-        var result = new Dictionary<RoleSlot, int>();
-        foreach (var entry in roleCoordinator.Assignments)
+        var localPlayer = ObjectTable.LocalPlayer
+            ?? throw new MarkerAssignmentException("当前无法识别插件使用者本人。");
+        if (!roleCoordinator.TryGetRole(localPlayer.EntityId, out var localRole))
         {
-            var member = currentParty.SingleOrDefault(candidate => candidate.EntityId == entry.Value)
-                ?? throw new MarkerAssignmentException($"{entry.Key} 对应队员已不在队伍中。");
-            result[entry.Key] = member.PartyIndex + 1;
+            throw new MarkerAssignmentException("插件使用者本人未包含在已确认的八人职责中。");
         }
 
-        return result;
+        return localRole;
     }
 
     private void RefreshPartyRoles(bool force)
@@ -379,12 +378,12 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.BeginDisabled();
         }
         var experimentalMarkers = configuration.EnableExperimentalPartyMarkers;
-        if (ImGui.Checkbox("启用真实团队标点（实验，默认关闭）", ref experimentalMarkers))
+        if (ImGui.Checkbox("启用只标本人（实验，默认关闭）", ref experimentalMarkers))
         {
             configuration.EnableExperimentalPartyMarkers = experimentalMarkers;
             PluginInterface.SavePluginConfig(configuration);
             status = experimentalMarkers
-                ? "真实团队标点已允许；仍需人工确认职责并手动启动"
+                ? "本人真实标点已允许；仍需人工确认完整八人职责并手动启动"
                 : "已切回 Dry-run 模式";
         }
         if (controllerArmed)
@@ -395,7 +394,7 @@ public sealed class Plugin : IDalamudPlugin
         if (configuration.EnableExperimentalPartyMarkers)
         {
             ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
-                "实验功能会实际改变全队可见的 Party Target Marker；请确保队内只有一个主控。 ");
+                "每位使用者只会清除并标记自己，不会操作其他队员；真实 Party Target Marker 仍对全队可见。 ");
         }
 
         ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}；待处理命令：{gameMarkerProvider.PendingCommandCount}");
@@ -406,7 +405,7 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.BeginDisabled();
         }
         var armButton = configuration.EnableExperimentalPartyMarkers
-            ? "手动启动真实标点主控（实验）"
+            ? "手动启动本人真实标点（实验）"
             : "手动启动 Dry-run 主控";
         if (ImGui.Button(armButton))
         {
@@ -418,7 +417,7 @@ public sealed class Plugin : IDalamudPlugin
             controllerArmed = true;
             lastCapturePollAt = 0;
             status = configuration.EnableExperimentalPartyMarkers
-                ? "真实标点主控已启动；等待遗弃末世开场八人点名"
+                ? "本人真实标点已启动；等待遗弃末世开场八人点名"
                 : "Dry-run 主控已启动；等待遗弃末世开场八人点名";
         }
         if (!canArm)
@@ -559,7 +558,7 @@ public sealed class Plugin : IDalamudPlugin
     private void DrawCapturePanel()
     {
         DrawSectionHeader("采集与诊断");
-        ImGui.TextWrapped("建议在 P2 转场前开始，记录到团灭或通关。导出只包含会话别名、职业和机制事件 ID。");
+        ImGui.TextWrapped("脱敏采集需手动开始，不会上传数据。它只记录 P1/N1 等会话别名、职业/职责、状态、读条和技能事件 ID，不记录角色名、账号/Content ID、服务器或聊天。建议在 P2 转场前开始，记录到团灭或通关后导出 ZIP。");
         if (!captureRecorder.IsActive)
         {
             if (ImGui.Button("开始脱敏采集"))
@@ -703,7 +702,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.0";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.1";
 
     private static void DrawSectionHeader(string title)
     {

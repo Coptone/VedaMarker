@@ -2,23 +2,26 @@ namespace VedaMarker.Core;
 
 public static class PartyMarkerCommandPlanner
 {
-    public static IReadOnlyList<string> BuildAssignmentCommands(
+    public static IReadOnlyList<string> BuildSelfAssignmentCommands(
         ValidatedMarkerAssignment assignment,
-        IReadOnlyDictionary<RoleSlot, int> partySlots)
+        RoleSlot localRole)
     {
-        ValidateCompleteAssignment(assignment, partySlots);
-        return assignment.Markers
-            .OrderBy(entry => entry.Value)
-            .Select(entry => $"/mk {CommandName(entry.Value)} <{partySlots[entry.Key]}>")
-            .ToArray();
+        ValidateCompleteAssignment(assignment);
+        if (!Enum.IsDefined(localRole) || !assignment.Markers.TryGetValue(localRole, out var marker))
+        {
+            throw new MarkerAssignmentException("无法从完整职责中识别插件使用者本人。");
+        }
+
+        return
+        [
+            "/mk off <me>",
+            $"/mk {CommandName(marker)} <me>",
+        ];
     }
 
-    public static IReadOnlyList<string> BuildClearCommands() =>
-        Enumerable.Range(1, 8).Select(slot => $"/mk off <{slot}>").ToArray();
+    public static IReadOnlyList<string> BuildSelfClearCommands() => ["/mk off <me>"];
 
-    private static void ValidateCompleteAssignment(
-        ValidatedMarkerAssignment assignment,
-        IReadOnlyDictionary<RoleSlot, int> partySlots)
+    private static void ValidateCompleteAssignment(ValidatedMarkerAssignment assignment)
     {
         var roles = Enum.GetValues<RoleSlot>();
         if (assignment.Markers.Count != roles.Length
@@ -26,14 +29,6 @@ public static class PartyMarkerCommandPlanner
             || roles.Any(role => !assignment.Markers.ContainsKey(role)))
         {
             throw new MarkerAssignmentException("标点提交器拒绝不完整或重复的标点集合。");
-        }
-
-        if (partySlots.Count != roles.Length
-            || roles.Any(role => !partySlots.ContainsKey(role))
-            || partySlots.Values.Any(slot => slot is < 1 or > 8)
-            || partySlots.Values.Distinct().Count() != roles.Length)
-        {
-            throw new MarkerAssignmentException("标点提交器拒绝不完整、重复或越界的队伍序号。");
         }
     }
 

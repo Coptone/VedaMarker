@@ -7,12 +7,25 @@ namespace VedaMarker;
 
 internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) : IMarkerProvider
 {
+    private static readonly HashSet<string> AllowedSelfCommands = new(StringComparer.Ordinal)
+    {
+        "/mk off <me>",
+        "/mk attack1 <me>",
+        "/mk attack2 <me>",
+        "/mk attack3 <me>",
+        "/mk attack4 <me>",
+        "/mk bind1 <me>",
+        "/mk bind2 <me>",
+        "/mk stop1 <me>",
+        "/mk stop2 <me>",
+    };
+
     private readonly Queue<string> pendingCommands = new();
     private long lastCommandAt;
     private bool hasSubmittedMarkers;
     private bool cleanupScheduled;
 
-    public string Name => "游戏团队标点（实验）";
+    public string Name => "本人团队标点（实验）";
 
     public bool ProducesGameMarkers => true;
 
@@ -20,9 +33,9 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
 
     public void Submit(
         ValidatedMarkerAssignment assignment,
-        IReadOnlyDictionary<RoleSlot, int> partySlots)
+        RoleSlot localRole)
     {
-        var commands = PartyMarkerCommandPlanner.BuildAssignmentCommands(assignment, partySlots);
+        var commands = PartyMarkerCommandPlanner.BuildSelfAssignmentCommands(assignment, localRole);
         pendingCommands.Clear();
         cleanupScheduled = false;
         foreach (var command in commands)
@@ -65,7 +78,7 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
         }
 
         cleanupScheduled = false;
-        var commands = PartyMarkerCommandPlanner.BuildClearCommands();
+        var commands = PartyMarkerCommandPlanner.BuildSelfClearCommands();
         if (immediate)
         {
             Exception? firstFailure = null;
@@ -101,11 +114,9 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
 
     private static unsafe void ExecuteCommand(string command)
     {
-        if (!command.StartsWith("/mk ", StringComparison.Ordinal)
-            || command.Length > 32
-            || command.Any(character => character is '\r' or '\n'))
+        if (!AllowedSelfCommands.Contains(command))
         {
-            throw new InvalidOperationException("拒绝执行白名单之外的标点命令。");
+            throw new InvalidOperationException("拒绝执行本人标点白名单之外的命令。");
         }
 
         var bytes = Encoding.UTF8.GetBytes(command);

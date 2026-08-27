@@ -5,44 +5,53 @@ namespace VedaMarker.Core.Tests;
 public sealed class PartyMarkerCommandPlannerTests
 {
     [Fact]
-    public void CompleteAssignmentBuildsEightWhitelistedCommands()
+    public void CompleteAssignmentClearsThenMarksOnlyLocalUser()
     {
         var roles = Enum.GetValues<RoleSlot>();
         var markers = roles.Zip(Enum.GetValues<PartyMarker>())
             .ToDictionary(entry => entry.First, entry => entry.Second);
-        var slots = roles.Select((role, index) => (role, slot: index + 1))
-            .ToDictionary(entry => entry.role, entry => entry.slot);
 
-        var commands = PartyMarkerCommandPlanner.BuildAssignmentCommands(
+        var commands = PartyMarkerCommandPlanner.BuildSelfAssignmentCommands(
             new ValidatedMarkerAssignment(1, markers),
-            slots);
+            RoleSlot.H1);
 
-        Assert.Equal(8, commands.Count);
-        Assert.Equal("/mk attack1 <1>", commands[0]);
-        Assert.Equal("/mk stop2 <8>", commands[7]);
-        Assert.All(commands, command => Assert.Matches("^/mk (attack[1-4]|bind[1-2]|stop[1-2]) <[1-8]>$", command));
+        Assert.Equal(["/mk off <me>", "/mk attack3 <me>"], commands);
     }
 
     [Fact]
-    public void MissingPartySlotRejectsEntireSubmission()
+    public void EveryLocalRoleAlwaysClearsSelfBeforeApplyingOneSelfMarker()
     {
         var roles = Enum.GetValues<RoleSlot>();
         var markers = roles.Zip(Enum.GetValues<PartyMarker>())
             .ToDictionary(entry => entry.First, entry => entry.Second);
-        var slots = roles.Take(7).Select((role, index) => (role, slot: index + 1))
-            .ToDictionary(entry => entry.role, entry => entry.slot);
+        var assignment = new ValidatedMarkerAssignment(1, markers);
+
+        foreach (var role in roles)
+        {
+            var commands = PartyMarkerCommandPlanner.BuildSelfAssignmentCommands(assignment, role);
+
+            Assert.Equal(2, commands.Count);
+            Assert.Equal("/mk off <me>", commands[0]);
+            Assert.Matches("^/mk (attack[1-4]|bind[1-2]|stop[1-2]) <me>$", commands[1]);
+        }
+    }
+
+    [Fact]
+    public void IncompleteAssignmentRejectsEntireSelfSubmission()
+    {
+        var roles = Enum.GetValues<RoleSlot>();
+        var markers = roles.Take(7).Zip(Enum.GetValues<PartyMarker>())
+            .ToDictionary(entry => entry.First, entry => entry.Second);
 
         Assert.Throws<MarkerAssignmentException>(() =>
-            PartyMarkerCommandPlanner.BuildAssignmentCommands(
+            PartyMarkerCommandPlanner.BuildSelfAssignmentCommands(
                 new ValidatedMarkerAssignment(1, markers),
-                slots));
+                RoleSlot.MT));
     }
 
     [Fact]
-    public void CleanupTargetsEveryPartySlot()
+    public void CleanupTargetsOnlyLocalUser()
     {
-        Assert.Equal(
-            Enumerable.Range(1, 8).Select(slot => $"/mk off <{slot}>"),
-            PartyMarkerCommandPlanner.BuildClearCommands());
+        Assert.Equal(["/mk off <me>"], PartyMarkerCommandPlanner.BuildSelfClearCommands());
     }
 }

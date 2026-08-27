@@ -4,8 +4,10 @@
 
 The combat path is local and deterministic. It consumes observed game events,
 normalizes them, advances the Forsaken state machine, validates a complete set of
-eight assignments, and then calls an `IMarkerProvider`. The initial provider is
-dry-run only. Native marker, VFX, and telegraph providers remain separate PoCs.
+eight assignments, resolves the local user's role, and then calls an
+`IMarkerProvider`. Dry-run remains the default. The experimental real-marker
+provider may only clear and mark `<me>`; VFX and telegraph providers remain
+separate PoCs.
 
 ```text
 Dalamud observations
@@ -13,9 +15,14 @@ Dalamud observations
   -> ForsakenStateMachine
   -> MarkerAssignmentResolver
   -> CompleteAssignmentValidator
-  -> DryRunMarkerProvider (P0/P1)
-  -> NativePartyMarkerProvider (future, manually armed)
+  -> DryRunMarkerProvider (default)
+  -> ChatCommandMarkerProvider (experimental, manually armed, self-only)
 ```
+
+For every new wave, the self-only provider queues exactly two operations: clear
+the local user's current marker, then apply the local user's new marker from the
+validated eight-person assignment. Completion, wipe, zone change, disarm, and
+unload only clear the local user.
 
 ## Role inference
 
@@ -29,7 +36,8 @@ Dalamud observations
 
 ## Evidence flow
 
-The recorder writes a versioned JSONL stream with session-local actor aliases.
+The recorder is started and exported manually; it never uploads data. It writes
+a versioned JSONL stream with session-local actor aliases.
 It records territory/combat transitions, party jobs, status changes, cast starts
 and ends, and observed ActionEffect IDs. It never writes character names,
 Content IDs, account IDs, or world names.
