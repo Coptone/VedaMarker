@@ -3,11 +3,11 @@
     "Author": "Coptone",
     "Name": "VedaMarker",
     "InternalName": "VedaMarker",
-    "AssemblyVersion": "0.2.2.0",
+    "AssemblyVersion": "0.2.3.0",
     "TestingAssemblyVersion": null,
     "Punchline": "绝妖星 P2 遗弃末世自动点名与可选目标标点。",
-    "Description": "VedaMarker 0.2.2 测试版：自动识别八轮点名并计算完整团队逻辑。真实标点默认仅自己，也可显式选择职责或全队；整场副本脱敏采集已扩展技能名、坐标、朝向、命中目标与地图效果。AOE/VFX 尚未启用。",
-    "Changelog": "增加仅自己、自定义职责、全队八人三种标点范围，默认仍为仅自己；每轮对所选目标统一先清标再标。采集格式升级至 v2，覆盖整场技能 ID/本地化名称、读条及空间信息、ActionEffect 目标、MapEffect 与周期位置快照。",
+    "Description": "VedaMarker 0.2.3 测试版：修复真实标点参数，按客户端语言生成命令，并增加可直接验证本人标点链路的测试按钮。标点默认仅自己，也可选择职责或全队；AOE/VFX 尚未启用。",
+    "Changelog": "修复禁止1/2错误使用 stop1/stop2 导致标点无效的问题，改用游戏命令表的 ignore1/ignore2；所有标点参数从当前客户端本地化数据生成；清标与新标阶段至少间隔 650ms；增加本人攻击1测试、清除测试和当前标记读取。",
     "ApplicableVersion": "any",
     "Tags": [
       "dmu",
@@ -16,7 +16,7 @@
       "utility"
     ],
     "DalamudApiLevel": 15,
-    "LastUpdate": 1787825030,
+    "LastUpdate": 1787842515,
     "LoadRequiredState": 0,
     "LoadSync": false,
     "CanUnloadAsync": false,

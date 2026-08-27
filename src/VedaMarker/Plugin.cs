@@ -13,9 +13,11 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
+using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using VedaMarker.Capture;
 using VedaMarker.Core;
 using LuminaAction = Lumina.Excel.Sheets.Action;
+using LuminaTextCommandParam = Lumina.Excel.Sheets.TextCommandParam;
 
 namespace VedaMarker;
 
@@ -23,6 +25,31 @@ public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/vedamarker";
     private static readonly RoleSlot[] RoleOrder = Enum.GetValues<RoleSlot>();
+    private static readonly IReadOnlyDictionary<string, uint> MarkerParameterRows =
+        new Dictionary<string, uint>(StringComparer.Ordinal)
+        {
+            ["off"] = 2,
+            ["attack1"] = 82,
+            ["attack2"] = 84,
+            ["attack3"] = 86,
+            ["attack4"] = 88,
+            ["bind1"] = 94,
+            ["bind2"] = 96,
+            ["ignore1"] = 102,
+            ["ignore2"] = 104,
+        };
+    private static readonly IReadOnlyDictionary<PartyMarker, int> MarkerMemoryIndices =
+        new Dictionary<PartyMarker, int>
+        {
+            [PartyMarker.Attack1] = 0,
+            [PartyMarker.Attack2] = 1,
+            [PartyMarker.Attack3] = 2,
+            [PartyMarker.Attack4] = 3,
+            [PartyMarker.Bind1] = 5,
+            [PartyMarker.Bind2] = 6,
+            [PartyMarker.Ignore1] = 8,
+            [PartyMarker.Ignore2] = 9,
+        };
 
     [PluginService] private static IDalamudPluginInterface PluginInterface { get; set; } = null!;
     [PluginService] private static ICommandManager CommandManager { get; set; } = null!;
@@ -80,7 +107,9 @@ public sealed class Plugin : IDalamudPlugin
             PluginInterface.SavePluginConfig(configuration);
         }
 
-        gameMarkerProvider = new ChatCommandMarkerProvider(() => configuration.MarkerCommandIntervalMs);
+        gameMarkerProvider = new ChatCommandMarkerProvider(
+            () => configuration.MarkerCommandIntervalMs,
+            TranslateMarkerCommand);
         activeMarkerProvider = dryRunMarkerProvider;
         captureRecorder = new CaptureRecorder(PluginInterface.GetPluginConfigDirectory());
         lastTerritoryId = ClientState.TerritoryType;
@@ -537,6 +566,52 @@ public sealed class Plugin : IDalamudPlugin
         return result;
     }
 
+    private string TranslateMarkerCommand(string command)
+    {
+        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3 || !string.Equals(parts[0], "/mk", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("标点命令格式无效。");
+        }
+
+        var parameter = parts[1];
+        if (MarkerParameterRows.TryGetValue(parameter, out var rowId))
+        {
+            var localized = DataManager.GetExcelSheet<LuminaTextCommandParam>()
+                .GetRow(rowId)
+                .Param
+                .ToString();
+            if (string.IsNullOrWhiteSpace(localized))
+            {
+                throw new InvalidOperationException($"客户端未提供标点参数 {parameter} 的本地化名称。");
+            }
+
+            parameter = localized;
+        }
+
+        return $"/marking {parameter} {parts[2]}";
+    }
+
+    private unsafe string ReadLocalMarkerStatus()
+    {
+        var localPlayer = ObjectTable.LocalPlayer;
+        var markingController = MarkingController.Instance();
+        if (localPlayer is null || markingController == null)
+        {
+            return "无法读取";
+        }
+
+        foreach (var entry in MarkerMemoryIndices)
+        {
+            if (markingController->Markers[entry.Value].ObjectId == localPlayer.EntityId)
+            {
+                return MarkerDisplayName(entry.Key);
+            }
+        }
+
+        return "无";
+    }
+
     private void RefreshPartyRoles(bool force)
     {
         var observed = ReadCurrentParty();
@@ -619,6 +694,11 @@ public sealed class Plugin : IDalamudPlugin
         if (ImGui.Checkbox("启用真实团队标点（实验，默认关闭）", ref experimentalMarkers))
         {
             configuration.EnableExperimentalPartyMarkers = experimentalMarkers;
+            if (!experimentalMarkers)
+            {
+                gameMarkerProvider.Clear();
+            }
+
             PluginInterface.SavePluginConfig(configuration);
             status = experimentalMarkers
                 ? "真实团队标点已允许；请选择目标范围、核对完整八人职责并手动启动"
@@ -634,6 +714,36 @@ public sealed class Plugin : IDalamudPlugin
         {
             ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
                 "默认只标本人；选择自定义职责或全队后，会实际清除并标记所选队员，且 Party Target Marker 对全队可见。 ");
+            ImGui.TextWrapped("标点链路自检会真实修改本人标记，可在进机制前直接验证：");
+            if (controllerArmed)
+            {
+                ImGui.BeginDisabled();
+            }
+
+            if (ImGui.Button("测试：给自己标攻击1"))
+            {
+                gameMarkerProvider.SubmitDiagnosticSelfMarker();
+                status = "已排队提交本人攻击1测试标点；请观察下方游戏内读取结果";
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("清除本人测试标点"))
+            {
+                gameMarkerProvider.SubmitDiagnosticSelfClear();
+                status = "已排队清除本人测试标点";
+            }
+
+            if (controllerArmed)
+            {
+                ImGui.EndDisabled();
+            }
+
+            ImGui.TextUnformatted($"游戏内当前本人标记：{ReadLocalMarkerStatus()}");
+            if (!string.IsNullOrWhiteSpace(gameMarkerProvider.LastSubmittedCommand))
+            {
+                ImGui.TextWrapped(
+                    $"最近提交：{gameMarkerProvider.LastSubmittedCommand}（累计 {gameMarkerProvider.SubmittedCommandCount} 条）");
+            }
         }
 
         ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}；待处理命令：{gameMarkerProvider.PendingCommandCount}");
@@ -1007,8 +1117,21 @@ public sealed class Plugin : IDalamudPlugin
         _ => "未知",
     };
 
+    private static string MarkerDisplayName(PartyMarker marker) => marker switch
+    {
+        PartyMarker.Attack1 => "攻击1",
+        PartyMarker.Attack2 => "攻击2",
+        PartyMarker.Attack3 => "攻击3",
+        PartyMarker.Attack4 => "攻击4",
+        PartyMarker.Bind1 => "锁链1",
+        PartyMarker.Bind2 => "锁链2",
+        PartyMarker.Ignore1 => "禁止1",
+        PartyMarker.Ignore2 => "禁止2",
+        _ => "未知",
+    };
+
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.2";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.3";
 
     private static void DrawSectionHeader(string title)
     {

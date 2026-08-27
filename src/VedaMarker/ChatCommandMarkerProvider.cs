@@ -5,14 +5,18 @@ using VedaMarker.Core;
 
 namespace VedaMarker;
 
-internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) : IMarkerProvider
+internal sealed class ChatCommandMarkerProvider(
+    Func<int> intervalMilliseconds,
+    Func<string, string> translateCommand) : IMarkerProvider
 {
+    private const int ClearToMarkDelayMs = 650;
     private static readonly HashSet<string> AllowedCommands = BuildAllowedCommands();
 
     private readonly Queue<string> pendingCommands = new();
     private long lastCommandAt;
     private bool hasSubmittedMarkers;
     private bool cleanupScheduled;
+    private bool lastCommandWasClear;
     private IReadOnlyList<string> lastClearCommands = Array.Empty<string>();
 
     public string Name => "可选目标团队标点（实验）";
@@ -20,6 +24,10 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
     public bool ProducesGameMarkers => true;
 
     public int PendingCommandCount => pendingCommands.Count;
+
+    public int SubmittedCommandCount { get; private set; }
+
+    public string? LastSubmittedCommand { get; private set; }
 
     public void Submit(
         ValidatedMarkerAssignment assignment,
@@ -46,6 +54,28 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
         hasSubmittedMarkers = true;
     }
 
+    public void SubmitDiagnosticSelfMarker()
+    {
+        pendingCommands.Clear();
+        cleanupScheduled = false;
+        lastCommandAt = 0;
+        lastCommandWasClear = false;
+        pendingCommands.Enqueue("/mk attack1 <me>");
+        lastClearCommands = ["/mk off <me>"];
+        hasSubmittedMarkers = true;
+    }
+
+    public void SubmitDiagnosticSelfClear()
+    {
+        pendingCommands.Clear();
+        cleanupScheduled = true;
+        lastCommandAt = 0;
+        lastCommandWasClear = false;
+        pendingCommands.Enqueue("/mk off <me>");
+        lastClearCommands = ["/mk off <me>"];
+        hasSubmittedMarkers = true;
+    }
+
     public void Tick(long now)
     {
         if (pendingCommands.Count == 0)
@@ -53,14 +83,22 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
             return;
         }
 
+        var nextIsClear = IsClearCommand(pendingCommands.Peek());
         var interval = Math.Clamp(intervalMilliseconds(), 100, 1000);
+        if (lastCommandWasClear && !nextIsClear)
+        {
+            interval = Math.Max(interval, ClearToMarkDelayMs);
+        }
+
         if (lastCommandAt != 0 && now - lastCommandAt < interval)
         {
             return;
         }
 
         lastCommandAt = now;
-        ExecuteCommand(pendingCommands.Peek());
+        var command = pendingCommands.Peek();
+        ExecuteCommand(command);
+        lastCommandWasClear = IsClearCommand(command);
         pendingCommands.Dequeue();
         if (pendingCommands.Count == 0 && cleanupScheduled)
         {
@@ -96,6 +134,7 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
             }
 
             lastCommandAt = 0;
+            lastCommandWasClear = false;
             hasSubmittedMarkers = false;
             lastClearCommands = Array.Empty<string>();
             if (firstFailure is not null)
@@ -114,18 +153,21 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
         cleanupScheduled = true;
     }
 
-    private static unsafe void ExecuteCommand(string command)
+    private unsafe void ExecuteCommand(string command)
     {
         if (!AllowedCommands.Contains(command))
         {
             throw new InvalidOperationException("拒绝执行标点白名单之外的命令。");
         }
 
-        var bytes = Encoding.UTF8.GetBytes(command);
+        var translatedCommand = translateCommand(command);
+        var bytes = Encoding.UTF8.GetBytes(translatedCommand);
         var message = Utf8String.FromSequence(bytes.Append((byte)0).ToArray());
         try
         {
             UIModule.Instance()->ProcessChatBoxEntry(message);
+            LastSubmittedCommand = translatedCommand;
+            SubmittedCommandCount++;
         }
         finally
         {
@@ -135,9 +177,12 @@ internal sealed class ChatCommandMarkerProvider(Func<int> intervalMilliseconds) 
 
     private static HashSet<string> BuildAllowedCommands()
     {
-        string[] markers = ["off", "attack1", "attack2", "attack3", "attack4", "bind1", "bind2", "stop1", "stop2"];
+        string[] markers = ["off", "attack1", "attack2", "attack3", "attack4", "bind1", "bind2", "ignore1", "ignore2"];
         string[] targets = ["<me>", "<1>", "<2>", "<3>", "<4>", "<5>", "<6>", "<7>", "<8>"];
         return markers.SelectMany(marker => targets.Select(target => $"/mk {marker} {target}"))
             .ToHashSet(StringComparer.Ordinal);
     }
+
+    private static bool IsClearCommand(string command) =>
+        command.StartsWith("/mk off ", StringComparison.Ordinal);
 }

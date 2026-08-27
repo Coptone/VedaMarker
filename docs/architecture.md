@@ -24,6 +24,12 @@ then queues new markers for every selected target from the validated eight-perso
 assignment. Completion, wipe, zone change, disarm, and unload clear the most
 recently selected target set. Self-only remains the default.
 
+Canonical commands are validated against a fixed whitelist, then marker
+parameters are resolved through the current client's `TextCommandParam` rows
+before submission. The clear phase and new-marker phase are separated by at
+least 650 ms. The provider records the last submitted localized command, while
+the UI reads `MarkingController` state to make an immediate self-test observable.
+
 ## Role inference
 
 - MT priority: WAR > PLD > GNB > DRK; the other tank becomes ST.

@@ -79,8 +79,8 @@ public static class PartyMarkerCommandPlanner
         PartyMarker.Attack4 => "attack4",
         PartyMarker.Bind1 => "bind1",
         PartyMarker.Bind2 => "bind2",
-        PartyMarker.Ignore1 => "stop1",
-        PartyMarker.Ignore2 => "stop2",
+        PartyMarker.Ignore1 => "ignore1",
+        PartyMarker.Ignore2 => "ignore2",
         _ => throw new MarkerAssignmentException($"未知 Party Marker：{marker}"),
     };
 }

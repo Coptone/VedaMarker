@@ -19,6 +19,20 @@ public sealed class PartyMarkerCommandPlannerTests
     }
 
     [Fact]
+    public void IgnoreMarkerUsesTheGamesIgnoreParameter()
+    {
+        var (assignment, slots) = CompleteAssignment();
+
+        var commands = PartyMarkerCommandPlanner.BuildAssignmentCommands(
+            assignment,
+            [RoleSlot.D3],
+            RoleSlot.D3,
+            slots);
+
+        Assert.Equal(["/mk off <me>", "/mk ignore1 <me>"], commands);
+    }
+
+    [Fact]
     public void CustomTargetsClearEverySelectionBeforeApplyingNewMarkers()
     {
         var (assignment, slots) = CompleteAssignment();
@@ -36,7 +50,7 @@ public sealed class PartyMarkerCommandPlannerTests
             "/mk off <8>",
             "/mk attack1 <1>",
             "/mk attack3 <me>",
-            "/mk stop2 <8>",
+            "/mk ignore2 <8>",
         ], commands);
     }
 
@@ -55,7 +69,7 @@ public sealed class PartyMarkerCommandPlannerTests
         Assert.Equal(16, commands.Count);
         Assert.All(commands.Take(8), command => Assert.StartsWith("/mk off ", command));
         Assert.All(commands.Skip(8), command =>
-            Assert.Matches("^/mk (attack[1-4]|bind[1-2]|stop[1-2]) <(me|[1-8])>$", command));
+            Assert.Matches("^/mk (attack[1-4]|bind[1-2]|ignore[1-2]) <(me|[1-8])>$", command));
     }
 
     [Fact]
