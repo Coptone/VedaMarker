@@ -3,11 +3,11 @@
     "Author": "Coptone",
     "Name": "VedaMarker",
     "InternalName": "VedaMarker",
-    "AssemblyVersion": "0.2.7.0",
+    "AssemblyVersion": "0.2.8.0",
     "TestingAssemblyVersion": null,
     "Punchline": "绝妖星 P2 遗弃末世自动点名与可选目标标点。",
-    "Description": "VedaMarker 0.2.7 测试版：增加O8S等任意八人副本可用的手动八轮模拟测试，复用正式奇偶轮分配和清标→新标流程。职责确认在本次副本内持续有效；AOE/VFX 尚未启用。",
-    "Changelog": "新增跨副本模拟测试：完整八人职责确认后手动启动，逐轮手动提交1至8轮模拟分配；支持仅自己、自定义职责或全队范围，使用正式分配器与原始 /mk clear 清标，可随时停止清理，团灭和退本自动停止。",
+    "Description": "VedaMarker 0.2.8 测试版：O8S模拟支持单人测试；仅自己模式无需八人队伍或职责确认，可选择本人模拟职责并逐轮验证清标→新标。自定义职责/全队仍要求完整八人确认；AOE/VFX 尚未启用。",
+    "Changelog": "跨副本模拟新增单人入口：标点范围为仅自己时，自动按职业推荐模拟职责，也可手动选择MT/ST/H1/H2/D1-D4；完整八标点分配仍由正式分配器生成，提交目标严格为本人。非本人目标继续执行完整八人队伍序号校验。",
     "ApplicableVersion": "any",
     "Tags": [
       "dmu",
@@ -16,7 +16,7 @@
       "utility"
     ],
     "DalamudApiLevel": 15,
-    "LastUpdate": 1787847508,
+    "LastUpdate": 1787849517,
     "LoadRequiredState": 0,
     "LoadSync": false,
     "CanUnloadAsync": false,

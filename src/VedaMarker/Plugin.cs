@@ -91,6 +91,10 @@ public sealed class Plugin : IDalamudPlugin
     private string markerDiagnosticSummary = "全部标点与清除尚未测试";
     private bool simulationArmed;
     private int simulationWave;
+    private bool simulationSoloMode;
+    private RoleSlot simulationLocalRole = RoleSlot.MT;
+    private RoleSlot soloSimulationRole = RoleSlot.MT;
+    private uint soloSimulationJobId;
 
     public Plugin()
     {
@@ -301,6 +305,7 @@ public sealed class Plugin : IDalamudPlugin
             controllerArmed = false;
             simulationArmed = false;
             simulationWave = 0;
+            simulationSoloMode = false;
             markerDiagnosticRunning = false;
             markerDiagnosticSummary = "测试中断：游戏标点命令提交失败";
             automationEngine.Reset();
@@ -844,7 +849,7 @@ public sealed class Plugin : IDalamudPlugin
 
             PluginInterface.SavePluginConfig(configuration);
             status = experimentalMarkers
-                ? "真实团队标点已允许；请选择目标范围、核对完整八人职责并手动启动"
+                ? "真实团队标点已允许；正式主控需核对完整八人职责，仅本人模拟可单人手动启动"
                 : "已切回 Dry-run 模式";
         }
         DrawMarkerTargetConfiguration();
@@ -1029,6 +1034,26 @@ public sealed class Plugin : IDalamudPlugin
         _ => "未知",
     };
 
+    private void RefreshSoloSimulationRoleRecommendation()
+    {
+        var localPlayer = ObjectTable.LocalPlayer;
+        if (localPlayer is null || localPlayer.ClassJob.RowId == soloSimulationJobId)
+        {
+            return;
+        }
+
+        soloSimulationJobId = localPlayer.ClassJob.RowId;
+        soloSimulationRole = JobCatalog.Category(soloSimulationJobId) switch
+        {
+            CombatRoleCategory.Tank => RoleSlot.MT,
+            CombatRoleCategory.Healer => RoleSlot.H1,
+            CombatRoleCategory.Melee => RoleSlot.D1,
+            CombatRoleCategory.PhysicalRanged => RoleSlot.D3,
+            CombatRoleCategory.MagicalRanged => RoleSlot.D4,
+            _ => RoleSlot.D1,
+        };
+    }
+
     private void DrawSimulationPanel()
     {
         DrawSectionHeader("跨副本模拟测试（O8S 可用）");
@@ -1037,21 +1062,48 @@ public sealed class Plugin : IDalamudPlugin
 
         if (!simulationArmed)
         {
-            var canStart = rolesConfirmed
-                && roleCoordinator.Assignments.Count == 8
+            RefreshSoloSimulationRoleRecommendation();
+            var hasConfirmedParty = rolesConfirmed && roleCoordinator.Assignments.Count == 8;
+            var soloMode = !hasConfirmedParty && configuration.MarkerTargetMode == MarkerTargetMode.SelfOnly;
+            var canStart = (hasConfirmedParty || soloMode)
+                && ObjectTable.LocalPlayer is not null
                 && HasConfiguredMarkerTargets()
                 && !controllerArmed
                 && !markerDiagnosticRunning;
+
+            if (soloMode)
+            {
+                ImGui.TextColored(new Vector4(0.55f, 0.9f, 0.55f, 1f),
+                    "单人模式：仅操作本人，不要求八人队伍或职责确认；自定义职责和全队模式仍要求完整八人队伍。");
+                if (ImGui.BeginCombo("本人模拟职责", soloSimulationRole.ToString()))
+                {
+                    foreach (var role in RoleOrder)
+                    {
+                        if (ImGui.Selectable(role.ToString(), role == soloSimulationRole))
+                        {
+                            soloSimulationRole = role;
+                        }
+                    }
+
+                    ImGui.EndCombo();
+                }
+            }
+
             if (!canStart)
             {
                 ImGui.BeginDisabled();
             }
 
             var label = configuration.EnableExperimentalPartyMarkers
-                ? "手动启动模拟测试（真实标点）"
-                : "手动启动模拟测试（Dry-run）";
+                ? soloMode
+                    ? "手动启动单人模拟（真实标点）"
+                    : "手动启动模拟测试（真实标点）"
+                : soloMode
+                    ? "手动启动单人模拟（Dry-run）"
+                    : "手动启动模拟测试（Dry-run）";
             if (ImGui.Button(label))
             {
+                var selectedSimulationRole = soloMode ? soloSimulationRole : ResolveLocalRole();
                 automationEngine.Reset();
                 currentAssignment = null;
                 activeMarkerProvider = configuration.EnableExperimentalPartyMarkers
@@ -1059,7 +1111,11 @@ public sealed class Plugin : IDalamudPlugin
                     : dryRunMarkerProvider;
                 simulationArmed = true;
                 simulationWave = 0;
-                status = "模拟测试已启动；请手动提交模拟第1轮";
+                simulationSoloMode = soloMode;
+                simulationLocalRole = selectedSimulationRole;
+                status = soloMode
+                    ? $"单人模拟已启动；本人按 {simulationLocalRole} 测试，请手动提交模拟第1轮"
+                    : "模拟测试已启动；请手动提交模拟第1轮";
             }
 
             if (!canStart)
@@ -1067,10 +1123,10 @@ public sealed class Plugin : IDalamudPlugin
                 ImGui.EndDisabled();
             }
 
-            if (!rolesConfirmed || roleCoordinator.Assignments.Count != 8)
+            if (!hasConfirmedParty && configuration.MarkerTargetMode != MarkerTargetMode.SelfOnly)
             {
                 ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
-                    "需要在完整八人队伍中确认职责后才能启动模拟测试。");
+                    "自定义职责或全队模拟仍需要在完整八人队伍中确认职责；单人测试请把标点目标范围改为‘仅自己’。");
             }
 
             return;
@@ -1148,9 +1204,14 @@ public sealed class Plugin : IDalamudPlugin
 
             var wave = simulationWave + 1;
             var assignment = ForsakenSimulationAssignmentFactory.Create(wave);
-            var localRole = ResolveLocalRole();
-            var targetRoles = ResolveMarkerTargets(localRole);
-            activeMarkerProvider.Submit(assignment, targetRoles, localRole, BuildPartySlots());
+            var localRole = simulationLocalRole;
+            IReadOnlyList<RoleSlot> targetRoles = simulationSoloMode
+                ? [localRole]
+                : ResolveMarkerTargets(localRole);
+            IReadOnlyDictionary<RoleSlot, int> partySlots = simulationSoloMode
+                ? new Dictionary<RoleSlot, int>()
+                : BuildPartySlots();
+            activeMarkerProvider.Submit(assignment, targetRoles, localRole, partySlots);
             simulationWave = wave;
             currentAssignment = assignment;
             status = $"模拟第 {wave} 轮已按清标→新标顺序提交到 {string.Join('/', targetRoles)}";
@@ -1364,6 +1425,7 @@ public sealed class Plugin : IDalamudPlugin
         controllerArmed = false;
         simulationArmed = false;
         simulationWave = 0;
+        simulationSoloMode = false;
         currentAssignment = null;
         automationEngine.Reset();
         activeMarkerProvider.Clear(immediateCleanup);
@@ -1441,7 +1503,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.7";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.8";
 
     private enum MarkerDiagnosticPhase
     {

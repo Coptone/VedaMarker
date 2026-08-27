@@ -24,7 +24,10 @@ safety validation. `ForsakenSimulationAssignmentFactory` supplies a complete
 synthetic odd/even mechanic snapshot to the production `MarkerAssignmentResolver`;
 the resulting eight-marker assignment then follows the same target selection,
 clear-before-mark queue, provider, and cleanup path as a real wave. The user
-must arm it and submit every wave manually.
+must arm it and submit every wave manually. Self-only simulation may omit the
+party-slot map because its sole validated target is the selected local role and
+the command target is always `<me>`. Any target set containing another role still
+requires the complete, unique eight-slot map and confirmed party roles.
 
 For every new wave, the provider first queues clears for every selected target,
 then queues new markers for every selected target from the validated eight-person

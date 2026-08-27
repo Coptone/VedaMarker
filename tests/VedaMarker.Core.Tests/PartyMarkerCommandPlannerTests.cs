@@ -19,6 +19,33 @@ public sealed class PartyMarkerCommandPlannerTests
     }
 
     [Fact]
+    public void SelfOnlyDoesNotRequirePartySlots()
+    {
+        var (assignment, _) = CompleteAssignment();
+
+        var commands = PartyMarkerCommandPlanner.BuildAssignmentCommands(
+            assignment,
+            [RoleSlot.D4],
+            RoleSlot.D4,
+            new Dictionary<RoleSlot, int>());
+
+        Assert.Equal(["/mk clear <me>", "/mk ignore2 <me>"], commands);
+    }
+
+    [Fact]
+    public void NonLocalTargetStillRequiresCompletePartySlots()
+    {
+        var (assignment, _) = CompleteAssignment();
+
+        Assert.Throws<MarkerAssignmentException>(() =>
+            PartyMarkerCommandPlanner.BuildAssignmentCommands(
+                assignment,
+                [RoleSlot.MT, RoleSlot.H1],
+                RoleSlot.MT,
+                new Dictionary<RoleSlot, int>()));
+    }
+
+    [Fact]
     public void IgnoreMarkerUsesTheGamesIgnoreParameter()
     {
         var (assignment, slots) = CompleteAssignment();
