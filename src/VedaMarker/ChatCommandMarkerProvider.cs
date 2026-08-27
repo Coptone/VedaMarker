@@ -54,13 +54,11 @@ internal sealed class ChatCommandMarkerProvider(
         hasSubmittedMarkers = true;
     }
 
-    public void SubmitDiagnosticSelfMarker()
+    public void SubmitDiagnosticSelfMarker(PartyMarker marker)
     {
         pendingCommands.Clear();
         cleanupScheduled = false;
-        lastCommandAt = 0;
-        lastCommandWasClear = false;
-        pendingCommands.Enqueue("/mk attack1 <me>");
+        pendingCommands.Enqueue(PartyMarkerCommandPlanner.BuildSelfMarkerCommand(marker));
         lastClearCommands = ["/mk off <me>"];
         hasSubmittedMarkers = true;
     }
@@ -69,8 +67,6 @@ internal sealed class ChatCommandMarkerProvider(
     {
         pendingCommands.Clear();
         cleanupScheduled = true;
-        lastCommandAt = 0;
-        lastCommandWasClear = false;
         pendingCommands.Enqueue("/mk off <me>");
         lastClearCommands = ["/mk off <me>"];
         hasSubmittedMarkers = true;

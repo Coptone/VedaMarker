@@ -21,5 +21,10 @@ last localized command submitted, and a readback of the current local marker
 from `MarkingController`. It also waits at least 650 ms between the clear phase
 and the new-marker phase.
 
-The PoC may be checked only after the owner confirms that the self-test visibly
-marks Attack 1 and the readback changes to `攻击1` in the game client.
+Version 0.2.4 replaces the single-marker check with a manually started sequence
+covering Attack 1-4, Bind 1-2, and Ignore 1-2. Each marker must be observed in
+`MarkingController`, then the matching clear must be observed before the next
+marker begins. The UI records a separate mark/clear result for all eight types.
+
+The PoC may be checked only after the owner confirms that the 0.2.4 diagnostic
+reports all eight mark/clear pairs as successful in the game client.

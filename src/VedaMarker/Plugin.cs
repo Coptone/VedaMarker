@@ -24,7 +24,9 @@ namespace VedaMarker;
 public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/vedamarker";
+    private const int MarkerDiagnosticObservationTimeoutMs = 2500;
     private static readonly RoleSlot[] RoleOrder = Enum.GetValues<RoleSlot>();
+    private static readonly PartyMarker[] MarkerDiagnosticOrder = Enum.GetValues<PartyMarker>();
     private static readonly IReadOnlyDictionary<string, uint> MarkerParameterRows =
         new Dictionary<string, uint>(StringComparer.Ordinal)
         {
@@ -82,6 +84,12 @@ public sealed class Plugin : IDalamudPlugin
     private bool controllerArmed;
     private long lastCapturePollAt;
     private uint lastTerritoryId;
+    private readonly List<MarkerDiagnosticResult> markerDiagnosticResults = [];
+    private bool markerDiagnosticRunning;
+    private int markerDiagnosticIndex;
+    private MarkerDiagnosticPhase markerDiagnosticPhase;
+    private long markerDiagnosticObservationDeadline;
+    private string markerDiagnosticSummary = "全部标点与清除尚未测试";
 
     public Plugin()
     {
@@ -285,10 +293,13 @@ public sealed class Plugin : IDalamudPlugin
         try
         {
             gameMarkerProvider.Tick(now);
+            AdvanceMarkerDiagnostic(now);
         }
         catch (Exception exception)
         {
             controllerArmed = false;
+            markerDiagnosticRunning = false;
+            markerDiagnosticSummary = "测试中断：游戏标点命令提交失败";
             automationEngine.Reset();
             currentAssignment = null;
             gameMarkerProvider.Clear();
@@ -592,25 +603,141 @@ public sealed class Plugin : IDalamudPlugin
         return $"/marking {parameter} {parts[2]}";
     }
 
-    private unsafe string ReadLocalMarkerStatus()
+    private unsafe LocalMarkerObservation ReadLocalMarker()
     {
         var localPlayer = ObjectTable.LocalPlayer;
         var markingController = MarkingController.Instance();
         if (localPlayer is null || markingController == null)
         {
-            return "无法读取";
+            return new LocalMarkerObservation(false, null);
         }
 
         foreach (var entry in MarkerMemoryIndices)
         {
             if (markingController->Markers[entry.Value].ObjectId == localPlayer.EntityId)
             {
-                return MarkerDisplayName(entry.Key);
+                return new LocalMarkerObservation(true, entry.Key);
             }
         }
 
-        return "无";
+        return new LocalMarkerObservation(true, null);
     }
+
+    private string ReadLocalMarkerStatus() => FormatMarkerObservation(ReadLocalMarker());
+
+    private void StartMarkerDiagnostic()
+    {
+        markerDiagnosticResults.Clear();
+        markerDiagnosticResults.AddRange(MarkerDiagnosticOrder.Select(marker => new MarkerDiagnosticResult(marker)));
+        markerDiagnosticRunning = true;
+        markerDiagnosticIndex = 0;
+        markerDiagnosticPhase = MarkerDiagnosticPhase.WaitingForMarker;
+        markerDiagnosticObservationDeadline = 0;
+        markerDiagnosticSummary = $"测试 1/{MarkerDiagnosticOrder.Length}：正在验证{MarkerDisplayName(MarkerDiagnosticOrder[0])}";
+        gameMarkerProvider.SubmitDiagnosticSelfMarker(MarkerDiagnosticOrder[0]);
+    }
+
+    private void AdvanceMarkerDiagnostic(long now)
+    {
+        if (!markerDiagnosticRunning || gameMarkerProvider.PendingCommandCount != 0)
+        {
+            return;
+        }
+
+        if (markerDiagnosticObservationDeadline == 0)
+        {
+            markerDiagnosticObservationDeadline = now + MarkerDiagnosticObservationTimeoutMs;
+        }
+
+        var expected = MarkerDiagnosticOrder[markerDiagnosticIndex];
+        var result = markerDiagnosticResults[markerDiagnosticIndex];
+        var observation = ReadLocalMarker();
+        if (markerDiagnosticPhase == MarkerDiagnosticPhase.WaitingForMarker)
+        {
+            if (observation.Available && observation.Marker == expected)
+            {
+                result.MarkerPassed = true;
+                result.MarkerObserved = FormatMarkerObservation(observation);
+                BeginMarkerDiagnosticClear(expected);
+            }
+            else if (now >= markerDiagnosticObservationDeadline)
+            {
+                result.MarkerPassed = false;
+                result.MarkerObserved = FormatMarkerObservation(observation);
+                BeginMarkerDiagnosticClear(expected);
+            }
+
+            return;
+        }
+
+        if (observation.Available && observation.Marker is null)
+        {
+            result.ClearPassed = true;
+            result.ClearObserved = FormatMarkerObservation(observation);
+            ContinueMarkerDiagnostic();
+        }
+        else if (now >= markerDiagnosticObservationDeadline)
+        {
+            result.ClearPassed = false;
+            result.ClearObserved = FormatMarkerObservation(observation);
+            ContinueMarkerDiagnostic();
+        }
+    }
+
+    private void BeginMarkerDiagnosticClear(PartyMarker marker)
+    {
+        markerDiagnosticPhase = MarkerDiagnosticPhase.WaitingForClear;
+        markerDiagnosticObservationDeadline = 0;
+        markerDiagnosticSummary =
+            $"测试 {markerDiagnosticIndex + 1}/{MarkerDiagnosticOrder.Length}：正在验证{MarkerDisplayName(marker)}清除";
+        gameMarkerProvider.SubmitDiagnosticSelfClear();
+    }
+
+    private void ContinueMarkerDiagnostic()
+    {
+        markerDiagnosticIndex++;
+        if (markerDiagnosticIndex >= MarkerDiagnosticOrder.Length)
+        {
+            markerDiagnosticRunning = false;
+            markerDiagnosticPhase = MarkerDiagnosticPhase.Idle;
+            markerDiagnosticObservationDeadline = 0;
+            var passed = markerDiagnosticResults.Count(result =>
+                result.MarkerPassed == true && result.ClearPassed == true);
+            markerDiagnosticSummary = passed == MarkerDiagnosticOrder.Length
+                ? "测试完成：8 种标点与逐个清除全部成功"
+                : $"测试完成：{passed}/8 项完全成功；请查看下方失败项";
+            status = markerDiagnosticSummary;
+            return;
+        }
+
+        var marker = MarkerDiagnosticOrder[markerDiagnosticIndex];
+        markerDiagnosticPhase = MarkerDiagnosticPhase.WaitingForMarker;
+        markerDiagnosticObservationDeadline = 0;
+        markerDiagnosticSummary =
+            $"测试 {markerDiagnosticIndex + 1}/{MarkerDiagnosticOrder.Length}：正在验证{MarkerDisplayName(marker)}";
+        gameMarkerProvider.SubmitDiagnosticSelfMarker(marker);
+    }
+
+    private void StopMarkerDiagnostic(string reason, bool immediateCleanup = false)
+    {
+        if (!markerDiagnosticRunning)
+        {
+            return;
+        }
+
+        markerDiagnosticRunning = false;
+        markerDiagnosticPhase = MarkerDiagnosticPhase.Idle;
+        markerDiagnosticObservationDeadline = 0;
+        markerDiagnosticSummary = reason;
+        gameMarkerProvider.Clear(immediateCleanup);
+    }
+
+    private static string FormatMarkerObservation(LocalMarkerObservation observation) =>
+        !observation.Available
+            ? "无法读取"
+            : observation.Marker is { } marker
+                ? MarkerDisplayName(marker)
+                : "无";
 
     private void RefreshPartyRoles(bool force)
     {
@@ -686,7 +813,8 @@ public sealed class Plugin : IDalamudPlugin
             controllerArmed ? $"{activeMarkerProvider.Name}主控已手动启动" : "主控未启动");
         ImGui.TextWrapped("整场技能与位置/方向采集已扩展；AoE 范围仍关闭，等待日志与录像逐技能验证。");
 
-        if (controllerArmed)
+        var safetyControlsLocked = controllerArmed || markerDiagnosticRunning;
+        if (safetyControlsLocked)
         {
             ImGui.BeginDisabled();
         }
@@ -705,7 +833,7 @@ public sealed class Plugin : IDalamudPlugin
                 : "已切回 Dry-run 模式";
         }
         DrawMarkerTargetConfiguration();
-        if (controllerArmed)
+        if (safetyControlsLocked)
         {
             ImGui.EndDisabled();
         }
@@ -714,16 +842,16 @@ public sealed class Plugin : IDalamudPlugin
         {
             ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
                 "默认只标本人；选择自定义职责或全队后，会实际清除并标记所选队员，且 Party Target Marker 对全队可见。 ");
-            ImGui.TextWrapped("标点链路自检会真实修改本人标记，可在进机制前直接验证：");
-            if (controllerArmed)
+            ImGui.TextWrapped("一键自检会依次真实标记本人并逐个清除，标点对全队可见；建议在进机制前测试：");
+            if (controllerArmed || markerDiagnosticRunning)
             {
                 ImGui.BeginDisabled();
             }
 
-            if (ImGui.Button("测试：给自己标攻击1"))
+            if (ImGui.Button("一键测试全部8种标点与清除"))
             {
-                gameMarkerProvider.SubmitDiagnosticSelfMarker();
-                status = "已排队提交本人攻击1测试标点；请观察下方游戏内读取结果";
+                StartMarkerDiagnostic();
+                status = "已开始逐项验证本人全部8种标点与清除";
             }
 
             ImGui.SameLine();
@@ -733,12 +861,38 @@ public sealed class Plugin : IDalamudPlugin
                 status = "已排队清除本人测试标点";
             }
 
-            if (controllerArmed)
+            if (controllerArmed || markerDiagnosticRunning)
             {
                 ImGui.EndDisabled();
             }
 
+            if (markerDiagnosticRunning)
+            {
+                ImGui.SameLine();
+                if (ImGui.Button("停止测试并清除"))
+                {
+                    StopMarkerDiagnostic("测试已由用户停止，并已排队清除本人标点");
+                    status = markerDiagnosticSummary;
+                }
+            }
+
             ImGui.TextUnformatted($"游戏内当前本人标记：{ReadLocalMarkerStatus()}");
+            ImGui.TextWrapped(markerDiagnosticSummary);
+            foreach (var result in markerDiagnosticResults.Where(result =>
+                         result.MarkerPassed.HasValue || result.ClearPassed.HasValue))
+            {
+                var markerResult = result.MarkerPassed == true
+                    ? "成功"
+                    : $"失败（读到：{result.MarkerObserved}）";
+                var clearResult = result.ClearPassed switch
+                {
+                    true => "成功",
+                    false => $"失败（读到：{result.ClearObserved}）",
+                    null => "等待中",
+                };
+                ImGui.TextUnformatted($"{MarkerDisplayName(result.Marker)}：标记{markerResult}；清除{clearResult}");
+            }
+
             if (!string.IsNullOrWhiteSpace(gameMarkerProvider.LastSubmittedCommand))
             {
                 ImGui.TextWrapped(
@@ -751,6 +905,7 @@ public sealed class Plugin : IDalamudPlugin
         var canArm = rolesConfirmed
             && roleCoordinator.Assignments.Count == 8
             && HasConfiguredMarkerTargets()
+            && !markerDiagnosticRunning
             && !controllerArmed;
         if (!canArm)
         {
@@ -1053,6 +1208,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void DisarmController(string reason, bool immediateCleanup = false)
     {
+        StopMarkerDiagnostic(reason, immediateCleanup);
         controllerArmed = false;
         currentAssignment = null;
         automationEngine.Reset();
@@ -1131,7 +1287,29 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.3";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.4";
+
+    private enum MarkerDiagnosticPhase
+    {
+        Idle,
+        WaitingForMarker,
+        WaitingForClear,
+    }
+
+    private readonly record struct LocalMarkerObservation(bool Available, PartyMarker? Marker);
+
+    private sealed class MarkerDiagnosticResult(PartyMarker marker)
+    {
+        public PartyMarker Marker { get; } = marker;
+
+        public bool? MarkerPassed { get; set; }
+
+        public string MarkerObserved { get; set; } = "未检测";
+
+        public bool? ClearPassed { get; set; }
+
+        public string ClearObserved { get; set; } = "未检测";
+    }
 
     private static void DrawSectionHeader(string title)
     {

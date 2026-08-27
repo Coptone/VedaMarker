@@ -33,6 +33,25 @@ public sealed class PartyMarkerCommandPlannerTests
     }
 
     [Fact]
+    public void DiagnosticSelfCommandsCoverAllEightMarkerParameters()
+    {
+        Assert.Equal(
+        [
+            "/mk attack1 <me>",
+            "/mk attack2 <me>",
+            "/mk attack3 <me>",
+            "/mk attack4 <me>",
+            "/mk bind1 <me>",
+            "/mk bind2 <me>",
+            "/mk ignore1 <me>",
+            "/mk ignore2 <me>",
+        ],
+            Enum.GetValues<PartyMarker>()
+                .Select(PartyMarkerCommandPlanner.BuildSelfMarkerCommand)
+                .ToArray());
+    }
+
+    [Fact]
     public void CustomTargetsClearEverySelectionBeforeApplyingNewMarkers()
     {
         var (assignment, slots) = CompleteAssignment();

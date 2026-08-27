@@ -20,8 +20,11 @@ eight-person assignment. At the start of every wave it first clears every select
 target, then applies every selected target's new marker. The default selection is
 the local player; selected-role and full-party modes require an explicit choice.
 Marker parameters are resolved from the current client's `TextCommandParam` data.
-The UI includes a real self Attack 1 test, a matching clear button, the currently
-observed local marker, and the most recently submitted localized command.
+The UI includes a manually started diagnostic that tests all eight real marker
+types on the local player. For each type it reads the game's marker state,
+clears the marker, reads the cleared state, and displays the per-item result.
+It also shows the currently observed local marker and the most recently
+submitted localized command.
 
 The built-in redacted recorder is started manually and never uploads data. It
 exports a schema-v2 local ZIP containing session aliases, jobs/roles, statuses,

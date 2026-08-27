@@ -26,6 +26,9 @@ public static class PartyMarkerCommandPlanner
         return targets.Select(role => $"/mk off {TargetReference(role, localRole, partySlots)}").ToArray();
     }
 
+    public static string BuildSelfMarkerCommand(PartyMarker marker) =>
+        $"/mk {CommandName(marker)} <me>";
+
     private static void ValidateCompleteAssignment(ValidatedMarkerAssignment assignment)
     {
         var roles = Enum.GetValues<RoleSlot>();
