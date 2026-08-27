@@ -23,6 +23,8 @@ eight-person assignment. At the start of every wave it first clears every select
 target, then applies every selected target's new marker. The default selection is
 the local player; selected-role and full-party modes require an explicit choice.
 Marker parameters are resolved from the current client's `TextCommandParam` data.
+Cleanup uses the game's raw `/mk clear <target>` form and bypasses parameter
+localization.
 The UI includes a manually started diagnostic that tests all eight real marker
 types on the local player. For each type it reads the game's marker state,
 clears the marker, reads the cleared state, and displays the per-item result.

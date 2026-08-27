@@ -24,9 +24,10 @@ then queues new markers for every selected target from the validated eight-perso
 assignment. Completion, wipe, zone change, disarm, and unload clear the most
 recently selected target set. Self-only remains the default.
 
-Canonical commands are validated against a fixed whitelist, then marker
-parameters are resolved through the current client's `TextCommandParam` rows
-before submission. Any transition between a clear phase and a marker phase in
+Canonical commands are validated against a fixed whitelist. Marker parameters
+are resolved through the current client's `TextCommandParam` rows before
+submission, while cleanup is submitted unchanged as `/mk clear <target>`.
+Any transition between a clear phase and a marker phase in
 either direction is separated by at least 650 ms; commands inside one phase use
 the configured queue interval. The provider records the last submitted localized command. A
 manual diagnostic walks through all eight marker types on the local player,

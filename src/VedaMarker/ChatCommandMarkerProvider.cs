@@ -59,7 +59,7 @@ internal sealed class ChatCommandMarkerProvider(
         pendingCommands.Clear();
         cleanupScheduled = false;
         pendingCommands.Enqueue(PartyMarkerCommandPlanner.BuildSelfMarkerCommand(marker));
-        lastClearCommands = ["/mk off <me>"];
+        lastClearCommands = ["/mk clear <me>"];
         hasSubmittedMarkers = true;
     }
 
@@ -67,8 +67,8 @@ internal sealed class ChatCommandMarkerProvider(
     {
         pendingCommands.Clear();
         cleanupScheduled = true;
-        pendingCommands.Enqueue("/mk off <me>");
-        lastClearCommands = ["/mk off <me>"];
+        pendingCommands.Enqueue("/mk clear <me>");
+        lastClearCommands = ["/mk clear <me>"];
         hasSubmittedMarkers = true;
     }
 
@@ -173,12 +173,12 @@ internal sealed class ChatCommandMarkerProvider(
 
     private static HashSet<string> BuildAllowedCommands()
     {
-        string[] markers = ["off", "attack1", "attack2", "attack3", "attack4", "bind1", "bind2", "ignore1", "ignore2"];
+        string[] markers = ["clear", "attack1", "attack2", "attack3", "attack4", "bind1", "bind2", "ignore1", "ignore2"];
         string[] targets = ["<me>", "<1>", "<2>", "<3>", "<4>", "<5>", "<6>", "<7>", "<8>"];
         return markers.SelectMany(marker => targets.Select(target => $"/mk {marker} {target}"))
             .ToHashSet(StringComparer.Ordinal);
     }
 
     private static bool IsClearCommand(string command) =>
-        command.StartsWith("/mk off ", StringComparison.Ordinal);
+        command.StartsWith("/mk clear ", StringComparison.Ordinal);
 }

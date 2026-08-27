@@ -37,3 +37,12 @@ the configured 150 ms from a marker to its clear command. Version 0.2.5 applies
 the 650 ms minimum to both phase transitions while retaining the shorter
 same-phase queue interval. This is a hypothesis-driven correction and does not
 close the PoC until the owner reruns the in-game diagnostic successfully.
+
+## 0.2.5 clear failure report
+
+The owner reported that clear still did not work in 0.2.5, disproving timing as
+the sole cause. A maintained Dalamud API 15 automarker was then inspected: its
+cleanup path submits raw `/mk clear <party-slot>` commands through
+`ProcessChatBoxEntry`. Version 0.2.6 changes both encounter cleanup and the
+self-diagnostic to the same raw `clear` form, bypassing `TextCommandParam`
+localization only for cleanup. This remains unverified until the owner retests.

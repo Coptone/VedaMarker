@@ -11,7 +11,7 @@ public static class PartyMarkerCommandPlanner
         ValidateCompleteAssignment(assignment);
         var targets = ValidateTargets(targetRoles, localRole, partySlots);
         var commands = new List<string>(targets.Length * 2);
-        commands.AddRange(targets.Select(role => $"/mk off {TargetReference(role, localRole, partySlots)}"));
+        commands.AddRange(targets.Select(role => $"/mk clear {TargetReference(role, localRole, partySlots)}"));
         commands.AddRange(targets.Select(role =>
             $"/mk {CommandName(assignment.Markers[role])} {TargetReference(role, localRole, partySlots)}"));
         return commands;
@@ -23,7 +23,7 @@ public static class PartyMarkerCommandPlanner
         IReadOnlyDictionary<RoleSlot, int> partySlots)
     {
         var targets = ValidateTargets(targetRoles, localRole, partySlots);
-        return targets.Select(role => $"/mk off {TargetReference(role, localRole, partySlots)}").ToArray();
+        return targets.Select(role => $"/mk clear {TargetReference(role, localRole, partySlots)}").ToArray();
     }
 
     public static string BuildSelfMarkerCommand(PartyMarker marker) =>

@@ -27,7 +27,7 @@ Last updated: 2026-08-27
 - [x] P1 marker command parameter correction, client-localized submission, and all-marker self-test UI
 - [x] P0 schema-v2 whole-duty capture implementation and privacy/export test
 - [ ] P0 in-game validation: schema-v2 action names/IDs, spatial observations, ActionEffect targets, and MapEffect events
-- [ ] P0 in-game revalidation: all eight real Party Target Markers and clears through the 0.2.5 diagnostic
+- [ ] P0 in-game revalidation: all eight real Party Target Markers and clears through the 0.2.6 diagnostic
 - [ ] P1 in-game PoC: persistent point-name VFX
 - [ ] P1 per-mechanic native telegraph validation
 
@@ -39,4 +39,4 @@ Items requiring game evidence remain unchecked even when the code builds.
 - Capture privacy/export: 1 test passed; schema-v2 ZIP contains only versioned manifest and JSONL.
 - Dalamud API 15 Release build: 0 warnings, 0 errors against the official staging development files.
 - Full in-game Forsaken status sequence is documented under `docs/evidence/`.
-- Real marking remains experimental after the 0.2.2 in-game failure report. Version 0.2.3 corrected `stop1/stop2` to the game's `ignore1/ignore2` and localized every parameter. Version 0.2.4 added an all-eight marker/clear diagnostic with native state readback. After the owner reported that clear appeared ineffective, version 0.2.5 applies the 650ms phase-transition delay in both directions; in-game revalidation is still required. VFX/AoE remain unavailable.
+- Real marking remains experimental after the 0.2.2 in-game failure report. Version 0.2.3 corrected marker parameters; version 0.2.4 added an all-eight diagnostic; version 0.2.5 applied a 650ms delay in both phase-transition directions. The owner reported that 0.2.5 clear still failed. Version 0.2.6 now submits the raw `/mk clear <target>` form used by a maintained API-15 automarker instead of localizing `off`; in-game revalidation is still required. VFX/AoE remain unavailable.

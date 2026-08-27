@@ -30,7 +30,6 @@ public sealed class Plugin : IDalamudPlugin
     private static readonly IReadOnlyDictionary<string, uint> MarkerParameterRows =
         new Dictionary<string, uint>(StringComparer.Ordinal)
         {
-            ["off"] = 2,
             ["attack1"] = 82,
             ["attack2"] = 84,
             ["attack3"] = 86,
@@ -586,6 +585,11 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         var parameter = parts[1];
+        if (string.Equals(parameter, "clear", StringComparison.Ordinal))
+        {
+            return command;
+        }
+
         if (MarkerParameterRows.TryGetValue(parameter, out var rowId))
         {
             var localized = DataManager.GetExcelSheet<LuminaTextCommandParam>()
@@ -1290,7 +1294,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.5";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.6";
 
     private enum MarkerDiagnosticPhase
     {

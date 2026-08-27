@@ -15,7 +15,7 @@ public sealed class PartyMarkerCommandPlannerTests
             RoleSlot.H1,
             slots);
 
-        Assert.Equal(["/mk off <me>", "/mk attack3 <me>"], commands);
+        Assert.Equal(["/mk clear <me>", "/mk attack3 <me>"], commands);
     }
 
     [Fact]
@@ -29,7 +29,7 @@ public sealed class PartyMarkerCommandPlannerTests
             RoleSlot.D3,
             slots);
 
-        Assert.Equal(["/mk off <me>", "/mk ignore1 <me>"], commands);
+        Assert.Equal(["/mk clear <me>", "/mk ignore1 <me>"], commands);
     }
 
     [Fact]
@@ -64,9 +64,9 @@ public sealed class PartyMarkerCommandPlannerTests
 
         Assert.Equal(
         [
-            "/mk off <1>",
-            "/mk off <me>",
-            "/mk off <8>",
+            "/mk clear <1>",
+            "/mk clear <me>",
+            "/mk clear <8>",
             "/mk attack1 <1>",
             "/mk attack3 <me>",
             "/mk ignore2 <8>",
@@ -86,7 +86,7 @@ public sealed class PartyMarkerCommandPlannerTests
             slots);
 
         Assert.Equal(16, commands.Count);
-        Assert.All(commands.Take(8), command => Assert.StartsWith("/mk off ", command));
+        Assert.All(commands.Take(8), command => Assert.StartsWith("/mk clear ", command));
         Assert.All(commands.Skip(8), command =>
             Assert.Matches("^/mk (attack[1-4]|bind[1-2]|ignore[1-2]) <(me|[1-8])>$", command));
     }
@@ -128,7 +128,7 @@ public sealed class PartyMarkerCommandPlannerTests
         var (_, slots) = CompleteAssignment();
 
         Assert.Equal(
-            ["/mk off <me>", "/mk off <8>"],
+            ["/mk clear <me>", "/mk clear <8>"],
             PartyMarkerCommandPlanner.BuildClearCommands(
                 [RoleSlot.H1, RoleSlot.D4],
                 RoleSlot.H1,
