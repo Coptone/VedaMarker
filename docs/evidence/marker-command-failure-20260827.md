@@ -46,3 +46,17 @@ cleanup path submits raw `/mk clear <party-slot>` commands through
 `ProcessChatBoxEntry`. Version 0.2.6 changes both encounter cleanup and the
 self-diagnostic to the same raw `clear` form, bypassing `TextCommandParam`
 localization only for cleanup. This remains unverified until the owner retests.
+
+## 0.2.9 native-provider replacement
+
+The owner reported that the command-based clear still failed. Version 0.2.9
+therefore removes the chat-command provider from the runtime path. The new
+experimental provider uses the native marking function documented in
+`lemegeton-native-marking-20260829.md`, reads the current target marker through
+`MarkingController`, and toggles that exact native marker index to clear it.
+There is no command fallback: signature discovery failure disables real marking.
+
+The all-eight self diagnostic and cross-duty simulator now exercise this native
+provider. Their successful build and controller readback logic are not an
+in-game result; the PoC remains open until the owner observes all eight mark and
+clear pairs in the current client.

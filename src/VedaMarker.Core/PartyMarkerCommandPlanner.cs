@@ -8,8 +8,11 @@ public static class PartyMarkerCommandPlanner
         RoleSlot localRole,
         IReadOnlyDictionary<RoleSlot, int> partySlots)
     {
-        ValidateCompleteAssignment(assignment);
-        var targets = ValidateTargets(targetRoles, localRole, partySlots);
+        var targets = PartyMarkerSubmissionValidator.Validate(
+            assignment,
+            targetRoles,
+            localRole,
+            partySlots);
         var commands = new List<string>(targets.Length * 2);
         commands.AddRange(targets.Select(role => $"/mk clear {TargetReference(role, localRole, partySlots)}"));
         commands.AddRange(targets.Select(role =>
@@ -22,14 +25,46 @@ public static class PartyMarkerCommandPlanner
         RoleSlot localRole,
         IReadOnlyDictionary<RoleSlot, int> partySlots)
     {
-        var targets = ValidateTargets(targetRoles, localRole, partySlots);
+        var targets = PartyMarkerSubmissionValidator.ValidateTargets(targetRoles, localRole, partySlots);
         return targets.Select(role => $"/mk clear {TargetReference(role, localRole, partySlots)}").ToArray();
     }
 
     public static string BuildSelfMarkerCommand(PartyMarker marker) =>
         $"/mk {CommandName(marker)} <me>";
 
-    private static void ValidateCompleteAssignment(ValidatedMarkerAssignment assignment)
+    private static string TargetReference(
+        RoleSlot role,
+        RoleSlot localRole,
+        IReadOnlyDictionary<RoleSlot, int> partySlots) =>
+        role == localRole ? "<me>" : $"<{partySlots[role]}>";
+
+    private static string CommandName(PartyMarker marker) => marker switch
+    {
+        PartyMarker.Attack1 => "attack1",
+        PartyMarker.Attack2 => "attack2",
+        PartyMarker.Attack3 => "attack3",
+        PartyMarker.Attack4 => "attack4",
+        PartyMarker.Bind1 => "bind1",
+        PartyMarker.Bind2 => "bind2",
+        PartyMarker.Ignore1 => "ignore1",
+        PartyMarker.Ignore2 => "ignore2",
+        _ => throw new MarkerAssignmentException($"未知 Party Marker：{marker}"),
+    };
+}
+
+public static class PartyMarkerSubmissionValidator
+{
+    public static RoleSlot[] Validate(
+        ValidatedMarkerAssignment assignment,
+        IReadOnlyCollection<RoleSlot> targetRoles,
+        RoleSlot localRole,
+        IReadOnlyDictionary<RoleSlot, int> partySlots)
+    {
+        ValidateCompleteAssignment(assignment);
+        return ValidateTargets(targetRoles, localRole, partySlots);
+    }
+
+    public static void ValidateCompleteAssignment(ValidatedMarkerAssignment assignment)
     {
         var roles = Enum.GetValues<RoleSlot>();
         if (assignment.Markers.Count != roles.Length
@@ -40,7 +75,7 @@ public static class PartyMarkerCommandPlanner
         }
     }
 
-    private static RoleSlot[] ValidateTargets(
+    public static RoleSlot[] ValidateTargets(
         IReadOnlyCollection<RoleSlot> targetRoles,
         RoleSlot localRole,
         IReadOnlyDictionary<RoleSlot, int> partySlots)
@@ -73,22 +108,4 @@ public static class PartyMarkerCommandPlanner
         return targets;
     }
 
-    private static string TargetReference(
-        RoleSlot role,
-        RoleSlot localRole,
-        IReadOnlyDictionary<RoleSlot, int> partySlots) =>
-        role == localRole ? "<me>" : $"<{partySlots[role]}>";
-
-    private static string CommandName(PartyMarker marker) => marker switch
-    {
-        PartyMarker.Attack1 => "attack1",
-        PartyMarker.Attack2 => "attack2",
-        PartyMarker.Attack3 => "attack3",
-        PartyMarker.Attack4 => "attack4",
-        PartyMarker.Bind1 => "bind1",
-        PartyMarker.Bind2 => "bind2",
-        PartyMarker.Ignore1 => "ignore1",
-        PartyMarker.Ignore2 => "ignore2",
-        _ => throw new MarkerAssignmentException($"未知 Party Marker：{marker}"),
-    };
 }

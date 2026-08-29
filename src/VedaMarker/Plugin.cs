@@ -17,7 +17,6 @@ using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using VedaMarker.Capture;
 using VedaMarker.Core;
 using LuminaAction = Lumina.Excel.Sheets.Action;
-using LuminaTextCommandParam = Lumina.Excel.Sheets.TextCommandParam;
 
 namespace VedaMarker;
 
@@ -27,18 +26,6 @@ public sealed class Plugin : IDalamudPlugin
     private const int MarkerDiagnosticObservationTimeoutMs = 2500;
     private static readonly RoleSlot[] RoleOrder = Enum.GetValues<RoleSlot>();
     private static readonly PartyMarker[] MarkerDiagnosticOrder = Enum.GetValues<PartyMarker>();
-    private static readonly IReadOnlyDictionary<string, uint> MarkerParameterRows =
-        new Dictionary<string, uint>(StringComparer.Ordinal)
-        {
-            ["attack1"] = 82,
-            ["attack2"] = 84,
-            ["attack3"] = 86,
-            ["attack4"] = 88,
-            ["bind1"] = 94,
-            ["bind2"] = 96,
-            ["ignore1"] = 102,
-            ["ignore2"] = 104,
-        };
     private static readonly IReadOnlyDictionary<PartyMarker, int> MarkerMemoryIndices =
         new Dictionary<PartyMarker, int>
         {
@@ -61,6 +48,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] private static IPartyList PartyList { get; set; } = null!;
     [PluginService] private static IFramework Framework { get; set; } = null!;
     [PluginService] private static IGameInteropProvider Interop { get; set; } = null!;
+    [PluginService] private static ISigScanner SigScanner { get; set; } = null!;
+    [PluginService] private static IGameGui GameGui { get; set; } = null!;
     [PluginService] private static IDataManager DataManager { get; set; } = null!;
     [PluginService] private static IPluginLog Log { get; set; } = null!;
 
@@ -68,7 +57,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PartyRoleCoordinator roleCoordinator = new();
     private readonly ForsakenAutomationEngine automationEngine = new();
     private readonly DryRunMarkerProvider dryRunMarkerProvider = new();
-    private readonly ChatCommandMarkerProvider gameMarkerProvider;
+    private readonly NativeMarkerProvider gameMarkerProvider;
+    private readonly WorldTelegraphRenderer worldTelegraphRenderer;
     private readonly CaptureRecorder captureRecorder;
     private readonly Dictionary<uint, CaptureActionMetadata> actionMetadataCache = [];
     private IMarkerProvider activeMarkerProvider;
@@ -95,6 +85,11 @@ public sealed class Plugin : IDalamudPlugin
     private RoleSlot simulationLocalRole = RoleSlot.MT;
     private RoleSlot soloSimulationRole = RoleSlot.MT;
     private uint soloSimulationJobId;
+    private bool localAoeSimulationActive;
+    private int localAoeWave = 1;
+    private int localAoeDirection8;
+    private Vector3 localAoeCenter;
+    private string localAoeStatus = "本地 AOE 模拟尚未启动";
 
     public Plugin()
     {
@@ -114,15 +109,24 @@ public sealed class Plugin : IDalamudPlugin
             configurationChanged = true;
         }
 
+        gameMarkerProvider = new NativeMarkerProvider(
+            SigScanner,
+            () => configuration.MarkerCommandIntervalMs,
+            () => ObjectTable.LocalPlayer?.EntityId,
+            partySlot => currentParty.FirstOrDefault(member => member.PartyIndex + 1 == partySlot)?.EntityId);
+        worldTelegraphRenderer = new WorldTelegraphRenderer(GameGui);
+        if (configuration.EnableExperimentalPartyMarkers && !gameMarkerProvider.IsAvailable)
+        {
+            configuration.EnableExperimentalPartyMarkers = false;
+            configurationChanged = true;
+        }
+
         if (configurationChanged)
         {
             configuration.Version = 3;
             PluginInterface.SavePluginConfig(configuration);
         }
 
-        gameMarkerProvider = new ChatCommandMarkerProvider(
-            () => configuration.MarkerCommandIntervalMs,
-            TranslateMarkerCommand);
         activeMarkerProvider = dryRunMarkerProvider;
         captureRecorder = new CaptureRecorder(PluginInterface.GetPluginConfigDirectory());
         lastTerritoryId = ClientState.TerritoryType;
@@ -140,6 +144,7 @@ public sealed class Plugin : IDalamudPlugin
         DutyState.DutyCompleted += OnDutyCompleted;
 
         RefreshPartyRoles(force: true);
+        Log.Information("VedaMarker native marker provider: {Status}", gameMarkerProvider.AvailabilityStatus);
         InstallActionEffectHook();
         InstallMapEffectHook();
     }
@@ -291,6 +296,8 @@ public sealed class Plugin : IDalamudPlugin
         {
             lastTerritoryId = ClientState.TerritoryType;
             DisarmController("区域发生变化，主控已自动停止");
+            localAoeSimulationActive = false;
+            localAoeStatus = "区域发生变化，本地 AOE 模拟已停止";
             rolesConfirmed = false;
         }
 
@@ -307,12 +314,12 @@ public sealed class Plugin : IDalamudPlugin
             simulationWave = 0;
             simulationSoloMode = false;
             markerDiagnosticRunning = false;
-            markerDiagnosticSummary = "测试中断：游戏标点命令提交失败";
+            markerDiagnosticSummary = "测试中断：原生游戏标点提交失败";
             automationEngine.Reset();
             currentAssignment = null;
             gameMarkerProvider.Clear();
-            status = "游戏标点命令提交失败，主控已停止；仍会继续尝试清理已提交标点";
-            Log.Error(exception, "VedaMarker party marker command failed");
+            status = "原生游戏标点提交失败，主控已停止；仍会继续尝试清理已提交标点";
+            Log.Error(exception, "VedaMarker native party marker operation failed");
         }
 
         if (!captureRecorder.IsActive && !controllerArmed)
@@ -585,37 +592,6 @@ public sealed class Plugin : IDalamudPlugin
         return result;
     }
 
-    private string TranslateMarkerCommand(string command)
-    {
-        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 3 || !string.Equals(parts[0], "/mk", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("标点命令格式无效。");
-        }
-
-        var parameter = parts[1];
-        if (string.Equals(parameter, "clear", StringComparison.Ordinal))
-        {
-            return command;
-        }
-
-        if (MarkerParameterRows.TryGetValue(parameter, out var rowId))
-        {
-            var localized = DataManager.GetExcelSheet<LuminaTextCommandParam>()
-                .GetRow(rowId)
-                .Param
-                .ToString();
-            if (string.IsNullOrWhiteSpace(localized))
-            {
-                throw new InvalidOperationException($"客户端未提供标点参数 {parameter} 的本地化名称。");
-            }
-
-            parameter = localized;
-        }
-
-        return $"/marking {parameter} {parts[2]}";
-    }
-
     private unsafe LocalMarkerObservation ReadLocalMarker()
     {
         var localPlayer = ObjectTable.LocalPlayer;
@@ -799,6 +775,22 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
+        if (localAoeSimulationActive)
+        {
+            try
+            {
+                worldTelegraphRenderer.Draw(
+                    localAoeCenter,
+                    ForsakenTelegraphPlanner.Create(localAoeWave, localAoeDirection8));
+            }
+            catch (Exception exception)
+            {
+                localAoeSimulationActive = false;
+                localAoeStatus = $"本地 AOE 绘制失败：{exception.Message}";
+                Log.Error(exception, "VedaMarker local AOE simulation draw failed");
+            }
+        }
+
         if (!showWindow)
         {
             return;
@@ -814,6 +806,7 @@ public sealed class Plugin : IDalamudPlugin
         DrawSafetyPanel();
         DrawRolePanel();
         DrawSimulationPanel();
+        DrawLocalAoeSimulationPanel();
         DrawAutomationPanel();
         DrawCapturePanel();
         ImGui.End();
@@ -831,7 +824,7 @@ public sealed class Plugin : IDalamudPlugin
         ImGui.TextColored(
             anyControllerArmed ? new Vector4(1f, 0.75f, 0.25f, 1f) : new Vector4(0.55f, 0.9f, 0.55f, 1f),
             controllerStatus);
-        ImGui.TextWrapped("整场技能与位置/方向采集已扩展；AoE 范围仍关闭，等待日志与录像逐技能验证。");
+        ImGui.TextWrapped("整场技能与位置/方向采集已扩展；本地 AOE 模拟可单人验证，但尚未接入绝妖星自动触发。");
 
         var safetyControlsLocked = anyControllerArmed || markerDiagnosticRunning;
         if (safetyControlsLocked)
@@ -839,7 +832,11 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.BeginDisabled();
         }
         var experimentalMarkers = configuration.EnableExperimentalPartyMarkers;
-        if (ImGui.Checkbox("启用真实团队标点（实验，默认关闭）", ref experimentalMarkers))
+        if (!gameMarkerProvider.IsAvailable)
+        {
+            ImGui.BeginDisabled();
+        }
+        if (ImGui.Checkbox("启用原生真实团队标点（实验，默认关闭）", ref experimentalMarkers))
         {
             configuration.EnableExperimentalPartyMarkers = experimentalMarkers;
             if (!experimentalMarkers)
@@ -852,6 +849,11 @@ public sealed class Plugin : IDalamudPlugin
                 ? "真实团队标点已允许；正式主控需核对完整八人职责，仅本人模拟可单人手动启动"
                 : "已切回 Dry-run 模式";
         }
+        if (!gameMarkerProvider.IsAvailable)
+        {
+            ImGui.EndDisabled();
+        }
+        ImGui.TextWrapped($"原生标点状态：{gameMarkerProvider.AvailabilityStatus}");
         DrawMarkerTargetConfiguration();
         if (safetyControlsLocked)
         {
@@ -913,18 +915,19 @@ public sealed class Plugin : IDalamudPlugin
                 ImGui.TextUnformatted($"{MarkerDisplayName(result.Marker)}：标记{markerResult}；清除{clearResult}");
             }
 
-            if (!string.IsNullOrWhiteSpace(gameMarkerProvider.LastSubmittedCommand))
+            if (!string.IsNullOrWhiteSpace(gameMarkerProvider.LastOperation))
             {
                 ImGui.TextWrapped(
-                    $"最近提交：{gameMarkerProvider.LastSubmittedCommand}（累计 {gameMarkerProvider.SubmittedCommandCount} 条）");
+                    $"最近操作：{gameMarkerProvider.LastOperation}（累计 {gameMarkerProvider.SubmittedOperationCount} 次原生调用）");
             }
         }
 
-        ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}；待处理命令：{gameMarkerProvider.PendingCommandCount}");
+        ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}；待处理操作：{gameMarkerProvider.PendingCommandCount}");
 
         var canArm = rolesConfirmed
             && roleCoordinator.Assignments.Count == 8
             && HasConfiguredMarkerTargets()
+            && (!configuration.EnableExperimentalPartyMarkers || gameMarkerProvider.IsAvailable)
             && !markerDiagnosticRunning
             && !simulationArmed
             && !controllerArmed;
@@ -1068,6 +1071,7 @@ public sealed class Plugin : IDalamudPlugin
             var canStart = (hasConfirmedParty || soloMode)
                 && ObjectTable.LocalPlayer is not null
                 && HasConfiguredMarkerTargets()
+                && (!configuration.EnableExperimentalPartyMarkers || gameMarkerProvider.IsAvailable)
                 && !controllerArmed
                 && !markerDiagnosticRunning;
 
@@ -1132,9 +1136,9 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        var commandsPending = activeMarkerProvider.ProducesGameMarkers
+        var operationsPending = activeMarkerProvider.ProducesGameMarkers
             && gameMarkerProvider.PendingCommandCount != 0;
-        var canSubmitNext = simulationWave < 8 && !commandsPending;
+        var canSubmitNext = simulationWave < 8 && !operationsPending;
         if (!canSubmitNext)
         {
             ImGui.BeginDisabled();
@@ -1159,7 +1163,7 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        ImGui.TextWrapped(commandsPending
+        ImGui.TextWrapped(operationsPending
             ? $"模拟 Wave {simulationWave}/8：正在执行清标→新标队列"
             : simulationWave == 8
                 ? "模拟八轮已全部提交；观察完成后请点击结束模拟并清理"
@@ -1188,6 +1192,59 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void DrawLocalAoeSimulationPanel()
+    {
+        DrawSectionHeader("本地 AOE 范围模拟（任意副本可用）");
+        ImGui.TextWrapped(
+            "只在本机绘制，不会给队友显示，也不会操作角色。以启动时本人位置为模拟场中，按奇偶轮显示站位名、30m/90° 扇形和 5m 钢铁范围。方向 0-7 每档旋转 45°。");
+
+        if (!localAoeSimulationActive)
+        {
+            var canStart = ObjectTable.LocalPlayer is not null;
+            if (!canStart)
+            {
+                ImGui.BeginDisabled();
+            }
+
+            if (ImGui.Button("以本人当前位置启动 AOE 模拟"))
+            {
+                localAoeCenter = ObjectTable.LocalPlayer!.Position;
+                localAoeWave = 1;
+                localAoeDirection8 = 0;
+                localAoeSimulationActive = true;
+                localAoeStatus = "本地 AOE 模拟已启动：Wave 1 / Direction 0";
+            }
+
+            if (!canStart)
+            {
+                ImGui.EndDisabled();
+            }
+
+            ImGui.TextWrapped(localAoeStatus);
+            return;
+        }
+
+        ImGui.SliderInt("模拟轮次", ref localAoeWave, 1, 8);
+        ImGui.SliderInt("方向 Direction8", ref localAoeDirection8, 0, 7);
+        if (ImGui.Button("把模拟中心移到本人当前位置") && ObjectTable.LocalPlayer is { } localPlayer)
+        {
+            localAoeCenter = localPlayer.Position;
+            localAoeStatus = $"已重新定位模拟中心：Wave {localAoeWave} / Direction {localAoeDirection8}";
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("停止 AOE 模拟"))
+        {
+            localAoeSimulationActive = false;
+            localAoeStatus = "本地 AOE 模拟已由用户停止";
+            return;
+        }
+
+        var plan = ForsakenTelegraphPlanner.Create(localAoeWave, localAoeDirection8);
+        ImGui.TextWrapped(
+            $"当前：Wave {localAoeWave} / Direction {localAoeDirection8}；{plan.Stations.Count} 个站位，{plan.Telegraphs.Count} 个已确认范围。关闭控制台后仍会继续显示。");
+    }
+
     private void SubmitNextSimulationWave()
     {
         try
@@ -1199,7 +1256,7 @@ public sealed class Plugin : IDalamudPlugin
 
             if (activeMarkerProvider.ProducesGameMarkers && gameMarkerProvider.PendingCommandCount != 0)
             {
-                throw new MarkerAssignmentException("上一轮标点命令仍在处理中。");
+                throw new MarkerAssignmentException("上一轮原生标点操作仍在处理中。");
             }
 
             var wave = simulationWave + 1;
@@ -1400,6 +1457,8 @@ public sealed class Plugin : IDalamudPlugin
     private void OnDutyWiped(IDutyStateEventArgs args)
     {
         captureRecorder.RecordLifecycle("duty_wiped");
+        localAoeSimulationActive = false;
+        localAoeStatus = "团灭，本地 AOE 模拟已停止";
         DisarmController(rolesConfirmed
             ? "团灭：主控已停止并完成清理；本次副本的职责确认已保留，请手动重新启动"
             : "团灭：主控已停止并完成清理");
@@ -1416,6 +1475,8 @@ public sealed class Plugin : IDalamudPlugin
     private void OnDutyCompleted(IDutyStateEventArgs args)
     {
         captureRecorder.RecordLifecycle("duty_completed");
+        localAoeSimulationActive = false;
+        localAoeStatus = "副本完成，本地 AOE 模拟已停止";
         DisarmController("副本完成：主控已停止并完成清理");
     }
 
@@ -1429,6 +1490,10 @@ public sealed class Plugin : IDalamudPlugin
         currentAssignment = null;
         automationEngine.Reset();
         activeMarkerProvider.Clear(immediateCleanup);
+        if (!ReferenceEquals(activeMarkerProvider, gameMarkerProvider))
+        {
+            gameMarkerProvider.Clear(immediateCleanup);
+        }
         status = reason;
     }
 
@@ -1503,7 +1568,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.8";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.9";
 
     private enum MarkerDiagnosticPhase
     {

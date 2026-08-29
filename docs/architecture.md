@@ -6,7 +6,7 @@ The combat path is local and deterministic. It consumes observed game events,
 normalizes them, advances the Forsaken state machine, validates a complete set of
 eight assignments, resolves the local user's role, and then calls an
 `IMarkerProvider`. Dry-run remains the default. The experimental real-marker
-provider defaults to `<me>` and may be explicitly configured for selected roles
+provider defaults to the local actor and may be explicitly configured for selected roles
 or all eight party members; VFX and telegraph providers remain separate PoCs.
 
 ```text
@@ -16,7 +16,7 @@ Dalamud observations
   -> MarkerAssignmentResolver
   -> CompleteAssignmentValidator
   -> DryRunMarkerProvider (default)
-  -> ChatCommandMarkerProvider (experimental, manually armed, configurable target scope)
+  -> NativeMarkerProvider (experimental, manually armed, configurable target scope)
 ```
 
 The cross-duty simulator bypasses encounter observations but not assignment or
@@ -26,7 +26,7 @@ the resulting eight-marker assignment then follows the same target selection,
 clear-before-mark queue, provider, and cleanup path as a real wave. The user
 must arm it and submit every wave manually. Self-only simulation may omit the
 party-slot map because its sole validated target is the selected local role and
-the command target is always `<me>`. Any target set containing another role still
+the native target is always the local actor ID. Any target set containing another role still
 requires the complete, unique eight-slot map and confirmed party roles.
 
 For every new wave, the provider first queues clears for every selected target,
@@ -34,16 +34,26 @@ then queues new markers for every selected target from the validated eight-perso
 assignment. Completion, wipe, zone change, disarm, and unload clear the most
 recently selected target set. Self-only remains the default.
 
-Canonical commands are validated against a fixed whitelist. Marker parameters
-are resolved through the current client's `TextCommandParam` rows before
-submission, while cleanup is submitted unchanged as `/mk clear <target>`.
-Any transition between a clear phase and a marker phase in
-either direction is separated by at least 650 ms; commands inside one phase use
-the configured queue interval. The provider records the last submitted
-localized command. A manual diagnostic walks through all eight marker types on the local player,
+The provider scans the evidence-backed native marker function during startup and
+refuses to enable if the signature is unavailable. It resolves actor IDs only
+after the complete assignment and target-scope validator succeeds. Cleanup reads
+the target's current marker from `MarkingController` and calls the native function
+with that same marker index, which toggles it off. Any transition between a clear
+phase and a marker phase in either direction is separated by at least 750 ms;
+operations inside one phase use the configured queue interval. The provider
+records the last native operation. A manual diagnostic walks through all eight marker types on the local player,
 reads each result from `MarkingController`, clears it, verifies the empty state,
 and reports each mark/clear pair separately. The diagnostic and encounter
 controller cannot run at the same time.
+
+The local AOE simulator is a separate read-only presentation path. It anchors a
+synthetic arena center at the local player's position, obtains odd/even station
+and range geometry from the game-independent `ForsakenTelegraphPlanner`, and
+projects sampled ground polygons with `IGameGui.WorldToScreen`. Wave and
+Direction8 are changed manually. No native Omen is created, no party state is
+mutated, and the simulator does not feed the encounter controller. Automatic
+telegraphs remain evidence-gated until trigger timing and arena orientation are
+validated in DMU.
 
 Role confirmation is scoped to the current instance. A wipe or duty recommence
 disarms the controller and queues cleanup but retains confirmation; leaving the
