@@ -50,12 +50,29 @@ steel ranges as circles with scale/radius 5. VedaMarker draws one odd-wave cone
 and circle, or two even-wave cones and circles, matching the extracted strategy
 layout.
 
+The supplied callbacks use the following native game resources:
+
+| Purpose | Resource |
+|---|---|
+| 90-degree fan | `vfx/omen/eff/z6r3_b4_fan90_k2.avfx` |
+| Steel circle | `vfx/omen/eff/m0347_sircle_01m1.avfx` |
+
+The source reads tower MapEffect log rows whose state begins with `0002` and
+whose slot is `01` through `08`. It converts each slot with `(9 - slot) % 8`,
+interpolates the two tower directions, adds four, and reduces modulo eight to
+produce the range `Direction8`. VedaMarker implements that conversion only for
+two state-2 observations belonging to the same already-recognized wave and
+arriving within two seconds; incomplete or ambiguous pairs fail closed.
+
 ## Acceptance boundary
 
-Version 0.2.9 exposes this geometry only through a manually started local
-world-space simulator centered on the local player's position. It is intended
-to verify visibility, scale, odd/even layouts, and rotation in any duty.
+Version 0.3.1 exposes a manually started native-Omen preview centered on the
+local player's position and an explicit opt-in Forsaken runtime path centered at
+the source arena `(100,100)`. The runtime clears the prior range at every wave
+transition and waits for the new wave's complete tower-direction pair before
+creating its range.
 
-The export is not sufficient evidence for automatic DMU trigger timing, the
-live arena's Direction8 convention, point-name VFX resources, or every encounter
-AOE. Those remain separate in-game PoCs and are not enabled automatically.
+The export supports implementation but does not replace in-game validation of
+native resource scale/orientation, live MapEffect ordering, cleanup, point-name
+VFX resources, or every encounter AOE. The encounter provider therefore remains
+off by default until the owner confirms the visual PoC.

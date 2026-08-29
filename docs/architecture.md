@@ -18,6 +18,7 @@ Dalamud observations
   -> CompleteAssignmentValidator
   -> DryRunMarkerProvider
   -> LocalMarkerProvider (manually armed, configurable target scope, client-local)
+  -> NativeOmenRenderer (explicit opt-in, tower MapEffect direction, client-local)
 ```
 
 The cross-duty simulator bypasses encounter observations but not assignment or
@@ -43,19 +44,26 @@ No marking function, chat command, or `MarkingController` write is used. A manua
 preview walks through all eight icons on the local player for 1.5 seconds each and
 clears between icons. The preview and encounter controller cannot run together.
 
-The local AOE simulator is a separate read-only presentation path. It anchors a
-synthetic arena center at the local player's position, obtains odd/even station
-and range geometry from the game-independent `ForsakenTelegraphPlanner`, and
-projects sampled ground polygons with `IGameGui.WorldToScreen`. Wave and
-Direction8 are changed manually. No native Omen is created, no party state is
-mutated, and the simulator does not feed the encounter controller. Automatic
-telegraphs remain evidence-gated until trigger timing and arena orientation are
-validated in DMU.
+The local AOE preview is a separate read-only presentation path. It anchors a
+synthetic arena center at the local player's position, obtains odd/even range
+geometry from the game-independent `ForsakenTelegraphPlanner`, and creates the
+supplied game-native Omen resources. Wave and Direction8 are changed manually.
+No party state is mutated.
 
-Role confirmation is scoped to the current instance. A wipe or duty recommence
-disarms the controller and queues cleanup but retains confirmation; leaving the
-territory or observing a real party-composition change resets it. Every pull
-still requires the user to manually arm the controller.
+The same native provider can be explicitly enabled for the encounter controller.
+The opening Forsaken cast activates direction tracking. Two state-2 tower
+`MapEffect` observations in the same recognized wave and within a two-second
+window are converted from map-effect slots to Direction8 using the supplied ACT
+reference. The current range is cleared as soon as a new assignment wave begins,
+then recreated only after that wave's direction is complete. The arena center is
+fixed at `(100, 100)` in X/Z and uses the local player's floor Y. Failure to
+create or clear an Omen never stops or invalidates marker processing.
+
+Role confirmation and controller authorization are scoped to the current duty
+instance. A wipe clears marker/Omen state and resets the encounter state machine;
+recommence automatically restores a previously authorized controller. Leaving
+the territory, completing the duty, observing a real party-composition change,
+encounter errors, or manual stop revokes authorization.
 
 ## Role inference
 

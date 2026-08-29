@@ -37,6 +37,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] private static IPartyList PartyList { get; set; } = null!;
     [PluginService] private static IFramework Framework { get; set; } = null!;
     [PluginService] private static IGameInteropProvider Interop { get; set; } = null!;
+    [PluginService] private static ISigScanner SigScanner { get; set; } = null!;
     [PluginService] private static IGameGui GameGui { get; set; } = null!;
     [PluginService] private static ITextureProvider TextureProvider { get; set; } = null!;
     [PluginService] private static IDataManager DataManager { get; set; } = null!;
@@ -45,9 +46,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginConfiguration configuration;
     private readonly PartyRoleCoordinator roleCoordinator = new();
     private readonly ForsakenAutomationEngine automationEngine = new();
+    private readonly ForsakenTowerDirectionTracker towerDirectionTracker = new();
     private readonly DryRunMarkerProvider dryRunMarkerProvider = new();
     private readonly LocalMarkerProvider localMarkerProvider;
-    private readonly WorldTelegraphRenderer worldTelegraphRenderer;
+    private readonly NativeOmenRenderer nativeOmenRenderer;
     private readonly CaptureRecorder captureRecorder;
     private readonly Dictionary<uint, CaptureActionMetadata> actionMetadataCache = [];
     private IMarkerProvider activeMarkerProvider;
@@ -60,6 +62,7 @@ public sealed class Plugin : IDalamudPlugin
     private bool showWindow;
     private bool rolesConfirmed;
     private bool controllerArmed;
+    private bool instanceControllerAuthorized;
     private long lastCapturePollAt;
     private uint lastTerritoryId;
     private readonly List<MarkerDiagnosticResult> markerDiagnosticResults = [];
@@ -78,7 +81,9 @@ public sealed class Plugin : IDalamudPlugin
     private int localAoeWave = 1;
     private int localAoeDirection8;
     private Vector3 localAoeCenter;
-    private string localAoeStatus = "本地 AOE 模拟尚未启动";
+    private string localAoeStatus = "游戏原生 AOE 测试尚未启动";
+    private int activeAutomaticAoeWave;
+    private int activeAutomaticAoeDirection8 = -1;
 
     public Plugin()
     {
@@ -98,6 +103,12 @@ public sealed class Plugin : IDalamudPlugin
             configurationChanged = true;
         }
 
+        if (configuration.Version < 5)
+        {
+            configuration.EnableForsakenNativeTelegraphs = false;
+            configurationChanged = true;
+        }
+
         if (!float.IsFinite(configuration.LocalMarkerScale)
             || configuration.LocalMarkerScale is < 0.5f or > 1.5f)
         {
@@ -112,11 +123,11 @@ public sealed class Plugin : IDalamudPlugin
             () => configuration.LocalMarkerScale,
             () => ObjectTable.LocalPlayer?.EntityId,
             partySlot => currentParty.FirstOrDefault(member => member.PartyIndex + 1 == partySlot)?.EntityId);
-        worldTelegraphRenderer = new WorldTelegraphRenderer(GameGui);
+        nativeOmenRenderer = new NativeOmenRenderer(SigScanner, Log);
 
         if (configurationChanged)
         {
-            configuration.Version = 4;
+            configuration.Version = 5;
             PluginInterface.SavePluginConfig(configuration);
         }
 
@@ -155,6 +166,7 @@ public sealed class Plugin : IDalamudPlugin
 
         mapEffectHook?.Dispose();
         actionEffectHook?.Dispose();
+        nativeOmenRenderer.Dispose();
         captureRecorder.Dispose();
         DutyState.DutyCompleted -= OnDutyCompleted;
         DutyState.DutyRecommenced -= OnDutyRecommenced;
@@ -269,6 +281,23 @@ public sealed class Plugin : IDalamudPlugin
         ushort timelineIndex)
     {
         mapEffectHook!.Original(director, index, state, timelineIndex);
+        var currentForsakenWave = automationEngine.Snapshot.CurrentWave;
+        if (controllerArmed
+            && ClientState.TerritoryType == ForsakenEncounterIds.Territory
+            && towerDirectionTracker.ObserveMapEffect(
+                index,
+                state,
+                currentForsakenWave,
+                Environment.TickCount64))
+        {
+            Log.Information(
+                "Forsaken tower direction captured: wave {Wave}, map effect {Index}/{State:X4}/{Timeline:X4}",
+                currentForsakenWave,
+                index,
+                state,
+                timelineIndex);
+        }
+
         if (captureRecorder.IsActive)
         {
             try
@@ -299,18 +328,24 @@ public sealed class Plugin : IDalamudPlugin
         {
             localMarkerProvider.Tick(now);
             AdvanceMarkerDiagnostic(now);
+            RefreshAutomaticTelegraphs();
         }
         catch (Exception exception)
         {
             controllerArmed = false;
+            instanceControllerAuthorized = false;
             simulationArmed = false;
             simulationWave = 0;
             simulationSoloMode = false;
             markerDiagnosticRunning = false;
             markerDiagnosticSummary = "测试中断：本地标点显示失败";
             automationEngine.Reset();
+            towerDirectionTracker.Reset();
             currentAssignment = null;
             localMarkerProvider.Clear();
+            nativeOmenRenderer.Clear();
+            activeAutomaticAoeWave = 0;
+            activeAutomaticAoeDirection8 = -1;
             status = "本地标点显示失败，主控已停止并完成清理";
             Log.Error(exception, "VedaMarker local marker operation failed");
         }
@@ -387,6 +422,14 @@ public sealed class Plugin : IDalamudPlugin
 
                 if (battleChara.IsCasting && battleChara.CastActionId != 0)
                 {
+                    if (controllerArmed
+                        && battleChara.CastActionId == ForsakenEncounterIds.ForsakenAction
+                        && !towerDirectionTracker.IsEncounterActive)
+                    {
+                        towerDirectionTracker.BeginEncounter();
+                        Log.Information("Forsaken opening cast identified; tower direction tracking started");
+                    }
+
                     var targetId = unchecked((uint)battleChara.CastTargetObjectId);
                     var target = targetId == 0 ? null : ObjectTable.SearchByEntityId(targetId);
                     CapturePosition? targetLocation = null;
@@ -532,20 +575,28 @@ public sealed class Plugin : IDalamudPlugin
 
         if (update.Assignment is not null)
         {
+            ClearTelegraphs();
+            if (!towerDirectionTracker.IsEncounterActive)
+            {
+                towerDirectionTracker.BeginEncounter();
+            }
+
             var localRole = ResolveLocalRole();
             var targetRoles = ResolveMarkerTargets(localRole);
             var partySlots = BuildPartySlots();
             activeMarkerProvider.Submit(update.Assignment, targetRoles, localRole, partySlots);
             currentAssignment = update.Assignment;
-            status = $"{update.Message}；完整八人逻辑已确认，已对 {string.Join('/', targetRoles)} 清除上一轮并显示本地新标";
+            var aoeStatus = configuration.EnableForsakenNativeTelegraphs
+                ? "；原生 AOE 正在等待本轮双塔方向"
+                : string.Empty;
+            status = $"{update.Message}；完整八人逻辑已确认，已对 {string.Join('/', targetRoles)} 清除上一轮并显示本地新标{aoeStatus}";
         }
 
         if (update.Completed)
         {
-            controllerArmed = false;
-            currentAssignment = null;
-            activeMarkerProvider.Clear();
-            status = $"{update.Message}；本地标点已清理";
+            DisarmController(
+                $"{update.Message}；本地标点和原生 AOE 已清理，本次副本自动恢复授权仍保留",
+                preserveInstanceAuthorization: true);
         }
     }
 
@@ -750,22 +801,6 @@ public sealed class Plugin : IDalamudPlugin
             Log.Error(exception, "VedaMarker local marker draw failed");
         }
 
-        if (localAoeSimulationActive)
-        {
-            try
-            {
-                worldTelegraphRenderer.Draw(
-                    localAoeCenter,
-                    ForsakenTelegraphPlanner.Create(localAoeWave, localAoeDirection8));
-            }
-            catch (Exception exception)
-            {
-                localAoeSimulationActive = false;
-                localAoeStatus = $"本地 AOE 绘制失败：{exception.Message}";
-                Log.Error(exception, "VedaMarker local AOE simulation draw failed");
-            }
-        }
-
         if (!showWindow)
         {
             return;
@@ -790,16 +825,18 @@ public sealed class Plugin : IDalamudPlugin
     private void DrawSafetyPanel()
     {
         DrawSectionHeader("主控状态");
-        var anyControllerArmed = controllerArmed || simulationArmed;
+        var anyControllerArmed = controllerArmed || simulationArmed || instanceControllerAuthorized;
         var controllerStatus = simulationArmed
             ? $"{activeMarkerProvider.Name}模拟测试已手动启动（Wave {simulationWave}/8）"
             : controllerArmed
-                ? $"{activeMarkerProvider.Name}主控已手动启动"
+                ? $"{activeMarkerProvider.Name}主控已启动；本次副本团灭后会自动恢复"
+                : instanceControllerAuthorized
+                    ? "本次副本已授权；等待副本重开时自动恢复主控"
                 : "主控未启动";
         ImGui.TextColored(
             anyControllerArmed ? new Vector4(1f, 0.75f, 0.25f, 1f) : new Vector4(0.55f, 0.9f, 0.55f, 1f),
             controllerStatus);
-        ImGui.TextWrapped("整场技能与位置/方向采集已扩展；本地 AOE 模拟可单人验证，但尚未接入绝妖星自动触发。");
+        ImGui.TextWrapped("首次核对职责并手动启动后，本次副本内团灭/重开会自动恢复；退本、队伍变化、完成副本或手动停止会撤销授权。");
 
         var safetyControlsLocked = anyControllerArmed || markerDiagnosticRunning;
         if (safetyControlsLocked)
@@ -891,6 +928,24 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.TextWrapped($"最近操作：{localMarkerProvider.LastOperation}；当前显示 {localMarkerProvider.ActiveMarkerCount} 个本地标点");
         }
 
+        var nativeTelegraphsEnabled = configuration.EnableForsakenNativeTelegraphs;
+        if (ImGui.Checkbox("启用遗弃末世游戏原生 AOE 范围（实验）", ref nativeTelegraphsEnabled))
+        {
+            configuration.EnableForsakenNativeTelegraphs = nativeTelegraphsEnabled;
+            if (!nativeTelegraphsEnabled)
+            {
+                ClearTelegraphs();
+            }
+
+            PluginInterface.SavePluginConfig(configuration);
+            status = nativeTelegraphsEnabled
+                ? "已启用原生 AOE：正式主控会按每轮双塔 MapEffect 自动识别方向并显示范围"
+                : "已关闭并清理原生 AOE 范围";
+        }
+        ImGui.TextWrapped(nativeOmenRenderer.IsAvailable
+            ? "原生 AOE 使用游戏自身 Omen 特效，仅本机可见；首次实机确认前保持显式勾选，不会替代游戏判定。"
+            : nativeOmenRenderer.LastStatus);
+
         ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}");
 
         var canArm = rolesConfirmed
@@ -898,7 +953,8 @@ public sealed class Plugin : IDalamudPlugin
             && HasConfiguredMarkerTargets()
             && !markerDiagnosticRunning
             && !simulationArmed
-            && !controllerArmed;
+            && !controllerArmed
+            && !instanceControllerAuthorized;
         if (!canArm)
         {
             ImGui.BeginDisabled();
@@ -908,16 +964,7 @@ public sealed class Plugin : IDalamudPlugin
             : "手动启动 Dry-run 主控";
         if (ImGui.Button(armButton))
         {
-            automationEngine.Reset();
-            currentAssignment = null;
-            activeMarkerProvider = configuration.EnableLocalMarkers
-                ? localMarkerProvider
-                : dryRunMarkerProvider;
-            controllerArmed = true;
-            lastCapturePollAt = 0;
-            status = configuration.EnableLocalMarkers
-                ? "本地标点主控已启动；等待遗弃末世开场八人点名"
-                : "Dry-run 主控已启动；等待遗弃末世开场八人点名";
+            ArmEncounterController(resumedAfterWipe: false);
         }
         if (!canArm)
         {
@@ -1040,6 +1087,8 @@ public sealed class Plugin : IDalamudPlugin
                 && ObjectTable.LocalPlayer is not null
                 && HasConfiguredMarkerTargets()
                 && !controllerArmed
+                && !instanceControllerAuthorized
+                && !localAoeSimulationActive
                 && !markerDiagnosticRunning;
 
             if (soloMode)
@@ -1075,7 +1124,9 @@ public sealed class Plugin : IDalamudPlugin
             if (ImGui.Button(label))
             {
                 var selectedSimulationRole = soloMode ? soloSimulationRole : ResolveLocalRole();
+                ClearTelegraphs();
                 automationEngine.Reset();
+                towerDirectionTracker.Reset();
                 currentAssignment = null;
                 activeMarkerProvider = configuration.EnableLocalMarkers
                     ? localMarkerProvider
@@ -1159,27 +1210,92 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void RefreshAutomaticTelegraphs()
+    {
+        if (!controllerArmed
+            || !configuration.EnableForsakenNativeTelegraphs
+            || localAoeSimulationActive
+            || currentAssignment is null
+            || !nativeOmenRenderer.IsAvailable)
+        {
+            return;
+        }
+
+        var wave = automationEngine.Snapshot.CurrentWave;
+        if (wave is < 1 or > 8
+            || !towerDirectionTracker.TryGetDirection(wave, out var direction8)
+            || (activeAutomaticAoeWave == wave && activeAutomaticAoeDirection8 == direction8))
+        {
+            return;
+        }
+
+        var localPlayer = ObjectTable.LocalPlayer;
+        if (localPlayer is null)
+        {
+            return;
+        }
+
+        var arenaCenter = new Vector3(100f, localPlayer.Position.Y, 100f);
+        if (nativeOmenRenderer.Replace(arenaCenter, ForsakenTelegraphPlanner.Create(wave, direction8)))
+        {
+            activeAutomaticAoeWave = wave;
+            activeAutomaticAoeDirection8 = direction8;
+            status =
+                $"Wave {wave} / Direction {direction8}：本地标点已更新，游戏原生 AOE 范围已显示";
+            return;
+        }
+
+        activeAutomaticAoeWave = 0;
+        activeAutomaticAoeDirection8 = -1;
+        status = nativeOmenRenderer.LastStatus;
+    }
+
+    private void ClearTelegraphs()
+    {
+        nativeOmenRenderer.Clear();
+        activeAutomaticAoeWave = 0;
+        activeAutomaticAoeDirection8 = -1;
+    }
+
+    private bool ReplaceManualTelegraphPreview()
+    {
+        var replaced = nativeOmenRenderer.Replace(
+            localAoeCenter,
+            ForsakenTelegraphPlanner.Create(localAoeWave, localAoeDirection8));
+        localAoeStatus = nativeOmenRenderer.LastStatus;
+        if (!replaced)
+        {
+            localAoeSimulationActive = false;
+        }
+
+        return replaced;
+    }
+
     private void DrawLocalAoeSimulationPanel()
     {
-        DrawSectionHeader("本地 AOE 范围模拟（任意副本可用）");
+        DrawSectionHeader("游戏原生 AOE 范围测试（任意副本可用）");
         ImGui.TextWrapped(
-            "只在本机绘制，不会给队友显示，也不会操作角色。以启动时本人位置为模拟场中，按奇偶轮显示站位名、30m/90° 扇形和 5m 钢铁范围。方向 0-7 每档旋转 45°。");
+            "只在本机创建游戏自身 Omen，不会给队友显示，也不会操作角色。以本人位置为测试中心，显示 30m/90° 扇形和 5m 钢铁范围；方向 0-7 每档旋转 45°。");
 
         if (!localAoeSimulationActive)
         {
-            var canStart = ObjectTable.LocalPlayer is not null;
+            var canStart = ObjectTable.LocalPlayer is not null
+                && nativeOmenRenderer.IsAvailable
+                && !controllerArmed
+                && !simulationArmed
+                && !instanceControllerAuthorized;
             if (!canStart)
             {
                 ImGui.BeginDisabled();
             }
 
-            if (ImGui.Button("以本人当前位置启动 AOE 模拟"))
+            if (ImGui.Button("以本人当前位置启动原生 AOE 测试"))
             {
                 localAoeCenter = ObjectTable.LocalPlayer!.Position;
                 localAoeWave = 1;
                 localAoeDirection8 = 0;
                 localAoeSimulationActive = true;
-                localAoeStatus = "本地 AOE 模拟已启动：Wave 1 / Direction 0";
+                ReplaceManualTelegraphPreview();
             }
 
             if (!canStart)
@@ -1187,29 +1303,37 @@ public sealed class Plugin : IDalamudPlugin
                 ImGui.EndDisabled();
             }
 
-            ImGui.TextWrapped(localAoeStatus);
+            ImGui.TextWrapped(nativeOmenRenderer.IsAvailable
+                ? localAoeStatus
+                : nativeOmenRenderer.LastStatus);
             return;
         }
 
-        ImGui.SliderInt("模拟轮次", ref localAoeWave, 1, 8);
-        ImGui.SliderInt("方向 Direction8", ref localAoeDirection8, 0, 7);
+        var waveChanged = ImGui.SliderInt("模拟轮次", ref localAoeWave, 1, 8);
+        var directionChanged = ImGui.SliderInt("方向 Direction8", ref localAoeDirection8, 0, 7);
+        if (waveChanged || directionChanged)
+        {
+            ReplaceManualTelegraphPreview();
+        }
+
         if (ImGui.Button("把模拟中心移到本人当前位置") && ObjectTable.LocalPlayer is { } localPlayer)
         {
             localAoeCenter = localPlayer.Position;
-            localAoeStatus = $"已重新定位模拟中心：Wave {localAoeWave} / Direction {localAoeDirection8}";
+            ReplaceManualTelegraphPreview();
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("停止 AOE 模拟"))
+        if (ImGui.Button("停止原生 AOE 测试"))
         {
             localAoeSimulationActive = false;
-            localAoeStatus = "本地 AOE 模拟已由用户停止";
+            ClearTelegraphs();
+            localAoeStatus = "游戏原生 AOE 测试已由用户停止并清理";
             return;
         }
 
         var plan = ForsakenTelegraphPlanner.Create(localAoeWave, localAoeDirection8);
         ImGui.TextWrapped(
-            $"当前：Wave {localAoeWave} / Direction {localAoeDirection8}；{plan.Stations.Count} 个站位，{plan.Telegraphs.Count} 个已确认范围。关闭控制台后仍会继续显示。");
+            $"当前：Wave {localAoeWave} / Direction {localAoeDirection8}；{plan.Telegraphs.Count} 个游戏原生范围。关闭控制台后仍会继续显示；点击停止会立即清理。{localAoeStatus}");
     }
 
     private void SubmitNextSimulationWave()
@@ -1254,6 +1378,12 @@ public sealed class Plugin : IDalamudPlugin
         ImGui.TextWrapped(snapshot.Status == ForsakenEncounterStatus.Inactive
             ? "等待开场八人点名（建议在遗弃末世读条前启动）"
             : $"当前：Wave {snapshot.CurrentWave} / {snapshot.Status}");
+        if (configuration.EnableForsakenNativeTelegraphs && snapshot.CurrentWave is >= 1 and <= 8)
+        {
+            ImGui.TextWrapped(towerDirectionTracker.TryGetDirection(snapshot.CurrentWave, out var direction8)
+                ? $"原生 AOE：本轮双塔方向已识别为 Direction {direction8}；{nativeOmenRenderer.LastStatus}"
+                : "原生 AOE：等待本轮两条 state=0002 的塔 MapEffect 后显示");
+        }
 
         if (currentAssignment is null || snapshot.Players.Count != 8)
         {
@@ -1421,46 +1551,101 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    private void ArmEncounterController(bool resumedAfterWipe)
+    {
+        localAoeSimulationActive = false;
+        ClearTelegraphs();
+        automationEngine.Reset();
+        towerDirectionTracker.Reset();
+        currentAssignment = null;
+        activeMarkerProvider = configuration.EnableLocalMarkers
+            ? localMarkerProvider
+            : dryRunMarkerProvider;
+        controllerArmed = true;
+        instanceControllerAuthorized = true;
+        lastCapturePollAt = 0;
+        var providerStatus = configuration.EnableLocalMarkers ? "本地标点" : "Dry-run";
+        var aoeStatus = configuration.EnableForsakenNativeTelegraphs
+            ? "；原生 AOE 会在每轮双塔方向识别完成后显示"
+            : string.Empty;
+        status = resumedAfterWipe
+            ? $"副本已重新开始：{providerStatus}主控已自动恢复，等待遗弃末世开场八人点名{aoeStatus}"
+            : $"{providerStatus}主控已启动并授权本次副本自动恢复；等待遗弃末世开场八人点名{aoeStatus}";
+    }
+
+    private bool TryResumeEncounterController()
+    {
+        if (!instanceControllerAuthorized
+            || !rolesConfirmed
+            || roleCoordinator.Assignments.Count != 8
+            || !HasConfiguredMarkerTargets())
+        {
+            return false;
+        }
+
+        ArmEncounterController(resumedAfterWipe: true);
+        return true;
+    }
+
     private void OnDutyWiped(IDutyStateEventArgs args)
     {
         captureRecorder.RecordLifecycle("duty_wiped");
         localAoeSimulationActive = false;
-        localAoeStatus = "团灭，本地 AOE 模拟已停止";
-        DisarmController(rolesConfirmed
-            ? "团灭：主控已停止并完成清理；本次副本的职责确认已保留，请手动重新启动"
-            : "团灭：主控已停止并完成清理");
+        localAoeStatus = "团灭，游戏原生 AOE 已清理";
+        DisarmController(
+            instanceControllerAuthorized
+                ? "团灭：本地标点和原生 AOE 已清理；等待副本重开后自动恢复"
+                : "团灭：主控已停止并完成清理",
+            preserveInstanceAuthorization: instanceControllerAuthorized);
     }
 
     private void OnDutyRecommenced(IDutyStateEventArgs args)
     {
         captureRecorder.RecordLifecycle("duty_recommenced");
-        DisarmController(rolesConfirmed
-            ? "副本重新开始：本次副本的职责确认已保留，请手动重新启动主控"
-            : "副本重新开始：请核对职责并手动启动主控");
+        var shouldResume = instanceControllerAuthorized;
+        DisarmController(
+            "副本重新开始：已清理上一次尝试的本地显示",
+            preserveInstanceAuthorization: shouldResume);
+        if (!TryResumeEncounterController())
+        {
+            status = rolesConfirmed
+                ? "副本重新开始：职责确认已保留；此前未授权自动恢复，请手动启动主控"
+                : "副本重新开始：请核对职责并手动启动主控";
+        }
     }
 
     private void OnDutyCompleted(IDutyStateEventArgs args)
     {
         captureRecorder.RecordLifecycle("duty_completed");
         localAoeSimulationActive = false;
-        localAoeStatus = "副本完成，本地 AOE 模拟已停止";
-        DisarmController("副本完成：主控已停止并完成清理");
+        localAoeStatus = "副本完成，游戏原生 AOE 已清理";
+        DisarmController("副本完成：主控已停止，本地标点和原生 AOE 已清理");
     }
 
-    private void DisarmController(string reason, bool immediateCleanup = false)
+    private void DisarmController(
+        string reason,
+        bool immediateCleanup = false,
+        bool preserveInstanceAuthorization = false)
     {
         StopMarkerDiagnostic(reason, immediateCleanup);
         controllerArmed = false;
+        if (!preserveInstanceAuthorization)
+        {
+            instanceControllerAuthorized = false;
+        }
+
         simulationArmed = false;
         simulationWave = 0;
         simulationSoloMode = false;
         currentAssignment = null;
         automationEngine.Reset();
+        towerDirectionTracker.Reset();
         activeMarkerProvider.Clear(immediateCleanup);
         if (!ReferenceEquals(activeMarkerProvider, localMarkerProvider))
         {
             localMarkerProvider.Clear(immediateCleanup);
         }
+        ClearTelegraphs();
         status = reason;
     }
 
@@ -1535,7 +1720,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.3.0";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.3.1";
 
     private enum MarkerDiagnosticPhase
     {

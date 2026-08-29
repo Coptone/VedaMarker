@@ -7,7 +7,7 @@ party target markers, local persistent native VFX, and validated local native
 telegraphs. It is intentionally separate from VedaAxis.
 
 - Never move, press keys, simulate input, or execute combat actions.
-- Real party markers may only run after the local user manually arms the controller. The default target is the local user; selected-role and full-party modes require an explicit local choice.
+- The encounter controller may only start after the local user manually arms it. That authorization may resume the local-only controller after wipes within the same duty instance, but must reset on exit, party change, duty completion, error, or manual stop. The default marker target is the local user; selected-role and full-party modes require an explicit local choice.
 - Never submit a partial marker set when all eight responsibilities are unknown.
 - Persistent VFX and telegraphs are local-only and must never block marker cleanup.
 - Do not add ACT, Triggernometry, PostNamazu, or a network service dependency.
