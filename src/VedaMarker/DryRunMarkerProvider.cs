@@ -6,9 +6,9 @@ internal interface IMarkerProvider
 {
     string Name { get; }
 
-    bool ProducesGameMarkers { get; }
+    bool ProducesMarkers { get; }
 
-    int PendingCommandCount { get; }
+    int PendingOperationCount { get; }
 
     void Submit(
         ValidatedMarkerAssignment assignment,
@@ -25,9 +25,9 @@ internal sealed class DryRunMarkerProvider : IMarkerProvider
 {
     public string Name => "Dry-run";
 
-    public bool ProducesGameMarkers => false;
+    public bool ProducesMarkers => false;
 
-    public int PendingCommandCount => 0;
+    public int PendingOperationCount => 0;
 
     public ValidatedMarkerAssignment? LastAssignment { get; private set; }
 
@@ -37,7 +37,7 @@ internal sealed class DryRunMarkerProvider : IMarkerProvider
         RoleSlot localRole,
         IReadOnlyDictionary<RoleSlot, int> partySlots)
     {
-        _ = PartyMarkerCommandPlanner.BuildAssignmentCommands(
+        _ = PartyMarkerSubmissionValidator.Validate(
             assignment,
             targetRoles,
             localRole,

@@ -6,7 +6,7 @@ VedaMarker itself.
 
 ## Lemegeton
 
-Native party-marker signature and marker-index behavior were adapted from
+Party-marker research and the local soft-marker game-icon mapping were adapted from
 Lemegeton 1.0.8.6:
 <https://github.com/paissaheavyindustries/Lemegeton/tree/v1.0.8.6>
 

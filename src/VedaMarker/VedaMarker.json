@@ -1,8 +1,8 @@
 {
   "Author": "Coptone",
   "Name": "VedaMarker",
-  "Punchline": "绝妖星 P2 遗弃末世自动点名与可选目标标点。",
-  "Description": "VedaMarker：自动识别遗弃末世八轮点名并计算完整团队逻辑。0.2.9 改用实验性原生标点，并可在任意副本单人测试本人标点、奇偶轮站位名和本地 AOE 范围；自动 AOE/VFX 尚未启用。",
+  "Punchline": "绝妖星 P2 遗弃末世自动点名与本地软标点。",
+  "Description": "VedaMarker：自动识别遗弃末世八轮点名并计算完整团队逻辑。0.3.0 改用只有本人可见的攻击/锁链/禁止软标点，保留仅自己、自定义职责和全队显示范围；可在任意副本单人预览标点、奇偶轮站位名和本地 AOE 范围。",
   "InternalName": "VedaMarker",
   "ApplicableVersion": "any",
   "Tags": ["dmu", "marker", "raid", "utility"]

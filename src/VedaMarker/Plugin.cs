@@ -8,12 +8,12 @@ using Dalamud.Game.Command;
 using Dalamud.Game.DutyState;
 using Dalamud.Hooking;
 using Dalamud.IoC;
+using Dalamud.Interface.Textures;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
-using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using VedaMarker.Capture;
 using VedaMarker.Core;
 using LuminaAction = Lumina.Excel.Sheets.Action;
@@ -23,21 +23,10 @@ namespace VedaMarker;
 public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/vedamarker";
-    private const int MarkerDiagnosticObservationTimeoutMs = 2500;
+    private const int MarkerDiagnosticDisplayDurationMs = 1500;
+    private const int MarkerDiagnosticClearDurationMs = 400;
     private static readonly RoleSlot[] RoleOrder = Enum.GetValues<RoleSlot>();
     private static readonly PartyMarker[] MarkerDiagnosticOrder = Enum.GetValues<PartyMarker>();
-    private static readonly IReadOnlyDictionary<PartyMarker, int> MarkerMemoryIndices =
-        new Dictionary<PartyMarker, int>
-        {
-            [PartyMarker.Attack1] = 0,
-            [PartyMarker.Attack2] = 1,
-            [PartyMarker.Attack3] = 2,
-            [PartyMarker.Attack4] = 3,
-            [PartyMarker.Bind1] = 5,
-            [PartyMarker.Bind2] = 6,
-            [PartyMarker.Ignore1] = 8,
-            [PartyMarker.Ignore2] = 9,
-        };
 
     [PluginService] private static IDalamudPluginInterface PluginInterface { get; set; } = null!;
     [PluginService] private static ICommandManager CommandManager { get; set; } = null!;
@@ -48,8 +37,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] private static IPartyList PartyList { get; set; } = null!;
     [PluginService] private static IFramework Framework { get; set; } = null!;
     [PluginService] private static IGameInteropProvider Interop { get; set; } = null!;
-    [PluginService] private static ISigScanner SigScanner { get; set; } = null!;
     [PluginService] private static IGameGui GameGui { get; set; } = null!;
+    [PluginService] private static ITextureProvider TextureProvider { get; set; } = null!;
     [PluginService] private static IDataManager DataManager { get; set; } = null!;
     [PluginService] private static IPluginLog Log { get; set; } = null!;
 
@@ -57,7 +46,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PartyRoleCoordinator roleCoordinator = new();
     private readonly ForsakenAutomationEngine automationEngine = new();
     private readonly DryRunMarkerProvider dryRunMarkerProvider = new();
-    private readonly NativeMarkerProvider gameMarkerProvider;
+    private readonly LocalMarkerProvider localMarkerProvider;
     private readonly WorldTelegraphRenderer worldTelegraphRenderer;
     private readonly CaptureRecorder captureRecorder;
     private readonly Dictionary<uint, CaptureActionMetadata> actionMetadataCache = [];
@@ -95,13 +84,6 @@ public sealed class Plugin : IDalamudPlugin
     {
         configuration = PluginInterface.GetPluginConfig() as PluginConfiguration ?? new PluginConfiguration();
         var configurationChanged = false;
-        if (configuration.Version < 2)
-        {
-            configuration.EnableExperimentalPartyMarkers = false;
-            configuration.MarkerCommandIntervalMs = 150;
-            configurationChanged = true;
-        }
-
         if (configuration.Version < 3 || !Enum.IsDefined(configuration.MarkerTargetMode))
         {
             configuration.MarkerTargetMode = MarkerTargetMode.SelfOnly;
@@ -109,21 +91,32 @@ public sealed class Plugin : IDalamudPlugin
             configurationChanged = true;
         }
 
-        gameMarkerProvider = new NativeMarkerProvider(
-            SigScanner,
-            () => configuration.MarkerCommandIntervalMs,
-            () => ObjectTable.LocalPlayer?.EntityId,
-            partySlot => currentParty.FirstOrDefault(member => member.PartyIndex + 1 == partySlot)?.EntityId);
-        worldTelegraphRenderer = new WorldTelegraphRenderer(GameGui);
-        if (configuration.EnableExperimentalPartyMarkers && !gameMarkerProvider.IsAvailable)
+        if (configuration.Version < 4)
         {
-            configuration.EnableExperimentalPartyMarkers = false;
+            configuration.EnableLocalMarkers = true;
+            configuration.LocalMarkerScale = 1f;
             configurationChanged = true;
         }
 
+        if (!float.IsFinite(configuration.LocalMarkerScale)
+            || configuration.LocalMarkerScale is < 0.5f or > 1.5f)
+        {
+            configuration.LocalMarkerScale = 1f;
+            configurationChanged = true;
+        }
+
+        localMarkerProvider = new LocalMarkerProvider(
+            GameGui,
+            ObjectTable,
+            TextureProvider,
+            () => configuration.LocalMarkerScale,
+            () => ObjectTable.LocalPlayer?.EntityId,
+            partySlot => currentParty.FirstOrDefault(member => member.PartyIndex + 1 == partySlot)?.EntityId);
+        worldTelegraphRenderer = new WorldTelegraphRenderer(GameGui);
+
         if (configurationChanged)
         {
-            configuration.Version = 3;
+            configuration.Version = 4;
             PluginInterface.SavePluginConfig(configuration);
         }
 
@@ -144,7 +137,7 @@ public sealed class Plugin : IDalamudPlugin
         DutyState.DutyCompleted += OnDutyCompleted;
 
         RefreshPartyRoles(force: true);
-        Log.Information("VedaMarker native marker provider: {Status}", gameMarkerProvider.AvailabilityStatus);
+        Log.Information("VedaMarker local marker provider initialized");
         InstallActionEffectHook();
         InstallMapEffectHook();
     }
@@ -304,7 +297,7 @@ public sealed class Plugin : IDalamudPlugin
         RefreshPartyRoles(force: false);
         try
         {
-            gameMarkerProvider.Tick(now);
+            localMarkerProvider.Tick(now);
             AdvanceMarkerDiagnostic(now);
         }
         catch (Exception exception)
@@ -314,12 +307,12 @@ public sealed class Plugin : IDalamudPlugin
             simulationWave = 0;
             simulationSoloMode = false;
             markerDiagnosticRunning = false;
-            markerDiagnosticSummary = "测试中断：原生游戏标点提交失败";
+            markerDiagnosticSummary = "测试中断：本地标点显示失败";
             automationEngine.Reset();
             currentAssignment = null;
-            gameMarkerProvider.Clear();
-            status = "原生游戏标点提交失败，主控已停止；仍会继续尝试清理已提交标点";
-            Log.Error(exception, "VedaMarker native party marker operation failed");
+            localMarkerProvider.Clear();
+            status = "本地标点显示失败，主控已停止并完成清理";
+            Log.Error(exception, "VedaMarker local marker operation failed");
         }
 
         if (!captureRecorder.IsActive && !controllerArmed)
@@ -544,7 +537,7 @@ public sealed class Plugin : IDalamudPlugin
             var partySlots = BuildPartySlots();
             activeMarkerProvider.Submit(update.Assignment, targetRoles, localRole, partySlots);
             currentAssignment = update.Assignment;
-            status = $"{update.Message}；完整八人逻辑已确认，已对 {string.Join('/', targetRoles)} 按清标→新标顺序提交";
+            status = $"{update.Message}；完整八人逻辑已确认，已对 {string.Join('/', targetRoles)} 清除上一轮并显示本地新标";
         }
 
         if (update.Completed)
@@ -552,7 +545,7 @@ public sealed class Plugin : IDalamudPlugin
             controllerArmed = false;
             currentAssignment = null;
             activeMarkerProvider.Clear();
-            status = $"{update.Message}；标点清理已提交";
+            status = $"{update.Message}；本地标点已清理";
         }
     }
 
@@ -592,24 +585,17 @@ public sealed class Plugin : IDalamudPlugin
         return result;
     }
 
-    private unsafe LocalMarkerObservation ReadLocalMarker()
+    private LocalMarkerObservation ReadLocalMarker()
     {
         var localPlayer = ObjectTable.LocalPlayer;
-        var markingController = MarkingController.Instance();
-        if (localPlayer is null || markingController == null)
+        if (localPlayer is null)
         {
             return new LocalMarkerObservation(false, null);
         }
 
-        foreach (var entry in MarkerMemoryIndices)
-        {
-            if (markingController->Markers[entry.Value].ObjectId == localPlayer.EntityId)
-            {
-                return new LocalMarkerObservation(true, entry.Key);
-            }
-        }
-
-        return new LocalMarkerObservation(true, null);
+        return localMarkerProvider.TryGetMarker(localPlayer.EntityId, out var marker)
+            ? new LocalMarkerObservation(true, marker)
+            : new LocalMarkerObservation(true, null);
     }
 
     private string ReadLocalMarkerStatus() => FormatMarkerObservation(ReadLocalMarker());
@@ -621,21 +607,16 @@ public sealed class Plugin : IDalamudPlugin
         markerDiagnosticRunning = true;
         markerDiagnosticIndex = 0;
         markerDiagnosticPhase = MarkerDiagnosticPhase.WaitingForMarker;
-        markerDiagnosticObservationDeadline = 0;
-        markerDiagnosticSummary = $"测试 1/{MarkerDiagnosticOrder.Length}：正在验证{MarkerDisplayName(MarkerDiagnosticOrder[0])}";
-        gameMarkerProvider.SubmitDiagnosticSelfMarker(MarkerDiagnosticOrder[0]);
+        markerDiagnosticObservationDeadline = Environment.TickCount64 + MarkerDiagnosticDisplayDurationMs;
+        markerDiagnosticSummary = $"预览 1/{MarkerDiagnosticOrder.Length}：正在显示{MarkerDisplayName(MarkerDiagnosticOrder[0])}";
+        localMarkerProvider.SubmitDiagnosticSelfMarker(MarkerDiagnosticOrder[0]);
     }
 
     private void AdvanceMarkerDiagnostic(long now)
     {
-        if (!markerDiagnosticRunning || gameMarkerProvider.PendingCommandCount != 0)
+        if (!markerDiagnosticRunning || now < markerDiagnosticObservationDeadline)
         {
             return;
-        }
-
-        if (markerDiagnosticObservationDeadline == 0)
-        {
-            markerDiagnosticObservationDeadline = now + MarkerDiagnosticObservationTimeoutMs;
         }
 
         var expected = MarkerDiagnosticOrder[markerDiagnosticIndex];
@@ -643,46 +624,27 @@ public sealed class Plugin : IDalamudPlugin
         var observation = ReadLocalMarker();
         if (markerDiagnosticPhase == MarkerDiagnosticPhase.WaitingForMarker)
         {
-            if (observation.Available && observation.Marker == expected)
-            {
-                result.MarkerPassed = true;
-                result.MarkerObserved = FormatMarkerObservation(observation);
-                BeginMarkerDiagnosticClear(expected);
-            }
-            else if (now >= markerDiagnosticObservationDeadline)
-            {
-                result.MarkerPassed = false;
-                result.MarkerObserved = FormatMarkerObservation(observation);
-                BeginMarkerDiagnosticClear(expected);
-            }
-
+            result.MarkerPassed = observation.Available && observation.Marker == expected;
+            result.MarkerObserved = FormatMarkerObservation(observation);
+            BeginMarkerDiagnosticClear(expected, now);
             return;
         }
 
-        if (observation.Available && observation.Marker is null)
-        {
-            result.ClearPassed = true;
-            result.ClearObserved = FormatMarkerObservation(observation);
-            ContinueMarkerDiagnostic();
-        }
-        else if (now >= markerDiagnosticObservationDeadline)
-        {
-            result.ClearPassed = false;
-            result.ClearObserved = FormatMarkerObservation(observation);
-            ContinueMarkerDiagnostic();
-        }
+        result.ClearPassed = observation.Available && observation.Marker is null;
+        result.ClearObserved = FormatMarkerObservation(observation);
+        ContinueMarkerDiagnostic(now);
     }
 
-    private void BeginMarkerDiagnosticClear(PartyMarker marker)
+    private void BeginMarkerDiagnosticClear(PartyMarker marker, long now)
     {
         markerDiagnosticPhase = MarkerDiagnosticPhase.WaitingForClear;
-        markerDiagnosticObservationDeadline = 0;
+        markerDiagnosticObservationDeadline = now + MarkerDiagnosticClearDurationMs;
         markerDiagnosticSummary =
-            $"测试 {markerDiagnosticIndex + 1}/{MarkerDiagnosticOrder.Length}：正在验证{MarkerDisplayName(marker)}清除";
-        gameMarkerProvider.SubmitDiagnosticSelfClear();
+            $"预览 {markerDiagnosticIndex + 1}/{MarkerDiagnosticOrder.Length}：正在清除{MarkerDisplayName(marker)}";
+        localMarkerProvider.SubmitDiagnosticSelfClear();
     }
 
-    private void ContinueMarkerDiagnostic()
+    private void ContinueMarkerDiagnostic(long now)
     {
         markerDiagnosticIndex++;
         if (markerDiagnosticIndex >= MarkerDiagnosticOrder.Length)
@@ -693,18 +655,18 @@ public sealed class Plugin : IDalamudPlugin
             var passed = markerDiagnosticResults.Count(result =>
                 result.MarkerPassed == true && result.ClearPassed == true);
             markerDiagnosticSummary = passed == MarkerDiagnosticOrder.Length
-                ? "测试完成：8 种标点与逐个清除全部成功"
-                : $"测试完成：{passed}/8 项完全成功；请查看下方失败项";
+                ? "本地逻辑预览完成：8 种图标均已依次显示并清除；请以刚才画面为最终验收"
+                : $"本地逻辑预览完成：{passed}/8 项状态切换成功；请查看下方失败项";
             status = markerDiagnosticSummary;
             return;
         }
 
         var marker = MarkerDiagnosticOrder[markerDiagnosticIndex];
         markerDiagnosticPhase = MarkerDiagnosticPhase.WaitingForMarker;
-        markerDiagnosticObservationDeadline = 0;
+        markerDiagnosticObservationDeadline = now + MarkerDiagnosticDisplayDurationMs;
         markerDiagnosticSummary =
-            $"测试 {markerDiagnosticIndex + 1}/{MarkerDiagnosticOrder.Length}：正在验证{MarkerDisplayName(marker)}";
-        gameMarkerProvider.SubmitDiagnosticSelfMarker(marker);
+            $"预览 {markerDiagnosticIndex + 1}/{MarkerDiagnosticOrder.Length}：正在显示{MarkerDisplayName(marker)}";
+        localMarkerProvider.SubmitDiagnosticSelfMarker(marker);
     }
 
     private void StopMarkerDiagnostic(string reason, bool immediateCleanup = false)
@@ -718,7 +680,7 @@ public sealed class Plugin : IDalamudPlugin
         markerDiagnosticPhase = MarkerDiagnosticPhase.Idle;
         markerDiagnosticObservationDeadline = 0;
         markerDiagnosticSummary = reason;
-        gameMarkerProvider.Clear(immediateCleanup);
+        localMarkerProvider.Clear(immediateCleanup);
     }
 
     private static string FormatMarkerObservation(LocalMarkerObservation observation) =>
@@ -775,6 +737,19 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Draw()
     {
+        try
+        {
+            localMarkerProvider.Draw();
+        }
+        catch (Exception exception)
+        {
+            localMarkerProvider.Clear();
+            markerDiagnosticRunning = false;
+            markerDiagnosticSummary = $"本地标点绘制失败：{exception.Message}";
+            status = markerDiagnosticSummary;
+            Log.Error(exception, "VedaMarker local marker draw failed");
+        }
+
         if (localAoeSimulationActive)
         {
             try
@@ -831,56 +806,54 @@ public sealed class Plugin : IDalamudPlugin
         {
             ImGui.BeginDisabled();
         }
-        var experimentalMarkers = configuration.EnableExperimentalPartyMarkers;
-        if (!gameMarkerProvider.IsAvailable)
+        var localMarkersEnabled = configuration.EnableLocalMarkers;
+        if (ImGui.Checkbox("启用本地软标点（只有自己可见）", ref localMarkersEnabled))
         {
-            ImGui.BeginDisabled();
-        }
-        if (ImGui.Checkbox("启用原生真实团队标点（实验，默认关闭）", ref experimentalMarkers))
-        {
-            configuration.EnableExperimentalPartyMarkers = experimentalMarkers;
-            if (!experimentalMarkers)
+            configuration.EnableLocalMarkers = localMarkersEnabled;
+            if (!localMarkersEnabled)
             {
-                gameMarkerProvider.Clear();
+                localMarkerProvider.Clear();
             }
 
             PluginInterface.SavePluginConfig(configuration);
-            status = experimentalMarkers
-                ? "真实团队标点已允许；正式主控需核对完整八人职责，仅本人模拟可单人手动启动"
+            status = localMarkersEnabled
+                ? "本地软标点已启用；正式主控仍需核对完整八人职责并手动启动"
                 : "已切回 Dry-run 模式";
         }
-        if (!gameMarkerProvider.IsAvailable)
-        {
-            ImGui.EndDisabled();
-        }
-        ImGui.TextWrapped($"原生标点状态：{gameMarkerProvider.AvailabilityStatus}");
+        ImGui.TextWrapped("本地软标点使用游戏内攻击/锁链/禁止图标绘制在角色头顶，不调用 Party Marker；无论目标范围怎么选，队友都不会看到。");
         DrawMarkerTargetConfiguration();
+        var markerScalePercent = configuration.LocalMarkerScale * 100f;
+        if (ImGui.SliderFloat("本地标点大小", ref markerScalePercent, 50f, 150f, "%.0f%%"))
+        {
+            configuration.LocalMarkerScale = markerScalePercent / 100f;
+            PluginInterface.SavePluginConfig(configuration);
+        }
         if (safetyControlsLocked)
         {
             ImGui.EndDisabled();
         }
 
-        if (configuration.EnableExperimentalPartyMarkers)
+        if (configuration.EnableLocalMarkers)
         {
-            ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
-                "默认只标本人；选择自定义职责或全队后，会实际清除并标记所选队员，且 Party Target Marker 对全队可见。 ");
-            ImGui.TextWrapped("一键自检会依次真实标记本人并逐个清除，标点对全队可见；建议在进机制前测试：");
+            ImGui.TextColored(new Vector4(0.55f, 0.9f, 0.55f, 1f),
+                "默认只显示本人；选择自定义职责或全队时，你会在对应队员头顶看到本地图标，但不会改变任何人的游戏团队标点。 ");
+            ImGui.TextWrapped("一键预览会在本人头顶依次显示 8 种图标，每种停留 1.5 秒并逐个清除：");
             if (anyControllerArmed || markerDiagnosticRunning)
             {
                 ImGui.BeginDisabled();
             }
 
-            if (ImGui.Button("一键测试全部8种标点与清除"))
+            if (ImGui.Button("一键预览全部8种本地标点"))
             {
                 StartMarkerDiagnostic();
-                status = "已开始逐项验证本人全部8种标点与清除";
+                status = "已开始在本人头顶依次预览全部8种本地标点";
             }
 
             ImGui.SameLine();
-            if (ImGui.Button("清除本人测试标点"))
+            if (ImGui.Button("清除本地测试标点"))
             {
-                gameMarkerProvider.SubmitDiagnosticSelfClear();
-                status = "已排队清除本人测试标点";
+                localMarkerProvider.SubmitDiagnosticSelfClear();
+                status = "已清除本地测试标点";
             }
 
             if (anyControllerArmed || markerDiagnosticRunning)
@@ -893,41 +866,36 @@ public sealed class Plugin : IDalamudPlugin
                 ImGui.SameLine();
                 if (ImGui.Button("停止测试并清除"))
                 {
-                    StopMarkerDiagnostic("测试已由用户停止，并已排队清除本人标点");
+                    StopMarkerDiagnostic("预览已由用户停止，本地标点已清除");
                     status = markerDiagnosticSummary;
                 }
             }
 
-            ImGui.TextUnformatted($"游戏内当前本人标记：{ReadLocalMarkerStatus()}");
+            ImGui.TextUnformatted($"本地当前本人标记：{ReadLocalMarkerStatus()}");
             ImGui.TextWrapped(markerDiagnosticSummary);
             foreach (var result in markerDiagnosticResults.Where(result =>
                          result.MarkerPassed.HasValue || result.ClearPassed.HasValue))
             {
                 var markerResult = result.MarkerPassed == true
-                    ? "成功"
-                    : $"失败（读到：{result.MarkerObserved}）";
+                    ? "已显示"
+                    : $"失败（状态：{result.MarkerObserved}）";
                 var clearResult = result.ClearPassed switch
                 {
-                    true => "成功",
-                    false => $"失败（读到：{result.ClearObserved}）",
+                    true => "已清除",
+                    false => $"失败（状态：{result.ClearObserved}）",
                     null => "等待中",
                 };
-                ImGui.TextUnformatted($"{MarkerDisplayName(result.Marker)}：标记{markerResult}；清除{clearResult}");
+                ImGui.TextUnformatted($"{MarkerDisplayName(result.Marker)}：{markerResult}；{clearResult}");
             }
 
-            if (!string.IsNullOrWhiteSpace(gameMarkerProvider.LastOperation))
-            {
-                ImGui.TextWrapped(
-                    $"最近操作：{gameMarkerProvider.LastOperation}（累计 {gameMarkerProvider.SubmittedOperationCount} 次原生调用）");
-            }
+            ImGui.TextWrapped($"最近操作：{localMarkerProvider.LastOperation}；当前显示 {localMarkerProvider.ActiveMarkerCount} 个本地标点");
         }
 
-        ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}；待处理操作：{gameMarkerProvider.PendingCommandCount}");
+        ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}");
 
         var canArm = rolesConfirmed
             && roleCoordinator.Assignments.Count == 8
             && HasConfiguredMarkerTargets()
-            && (!configuration.EnableExperimentalPartyMarkers || gameMarkerProvider.IsAvailable)
             && !markerDiagnosticRunning
             && !simulationArmed
             && !controllerArmed;
@@ -935,20 +903,20 @@ public sealed class Plugin : IDalamudPlugin
         {
             ImGui.BeginDisabled();
         }
-        var armButton = configuration.EnableExperimentalPartyMarkers
-            ? "手动启动真实标点（实验）"
+        var armButton = configuration.EnableLocalMarkers
+            ? "手动启动本地标点主控"
             : "手动启动 Dry-run 主控";
         if (ImGui.Button(armButton))
         {
             automationEngine.Reset();
             currentAssignment = null;
-            activeMarkerProvider = configuration.EnableExperimentalPartyMarkers
-                ? gameMarkerProvider
+            activeMarkerProvider = configuration.EnableLocalMarkers
+                ? localMarkerProvider
                 : dryRunMarkerProvider;
             controllerArmed = true;
             lastCapturePollAt = 0;
-            status = configuration.EnableExperimentalPartyMarkers
-                ? "真实标点已启动；等待遗弃末世开场八人点名"
+            status = configuration.EnableLocalMarkers
+                ? "本地标点主控已启动；等待遗弃末世开场八人点名"
                 : "Dry-run 主控已启动；等待遗弃末世开场八人点名";
         }
         if (!canArm)
@@ -1061,7 +1029,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         DrawSectionHeader("跨副本模拟测试（O8S 可用）");
         ImGui.TextWrapped(
-            "模拟测试不读取当前副本机制，只用正式奇偶轮分配器生成完整八人标点。每轮必须手动提交，并按正式流程先清标再标；不会执行移动或战斗操作。");
+            "模拟测试不读取当前副本机制，只用正式奇偶轮分配器生成完整八人标点。每轮必须手动提交，并先清除上一轮本地标点再显示新一轮；不会执行移动或战斗操作，也不会让队友看到标点。");
 
         if (!simulationArmed)
         {
@@ -1071,7 +1039,6 @@ public sealed class Plugin : IDalamudPlugin
             var canStart = (hasConfirmedParty || soloMode)
                 && ObjectTable.LocalPlayer is not null
                 && HasConfiguredMarkerTargets()
-                && (!configuration.EnableExperimentalPartyMarkers || gameMarkerProvider.IsAvailable)
                 && !controllerArmed
                 && !markerDiagnosticRunning;
 
@@ -1098,10 +1065,10 @@ public sealed class Plugin : IDalamudPlugin
                 ImGui.BeginDisabled();
             }
 
-            var label = configuration.EnableExperimentalPartyMarkers
+            var label = configuration.EnableLocalMarkers
                 ? soloMode
-                    ? "手动启动单人模拟（真实标点）"
-                    : "手动启动模拟测试（真实标点）"
+                    ? "手动启动单人模拟（本地标点）"
+                    : "手动启动模拟测试（本地标点）"
                 : soloMode
                     ? "手动启动单人模拟（Dry-run）"
                     : "手动启动模拟测试（Dry-run）";
@@ -1110,8 +1077,8 @@ public sealed class Plugin : IDalamudPlugin
                 var selectedSimulationRole = soloMode ? soloSimulationRole : ResolveLocalRole();
                 automationEngine.Reset();
                 currentAssignment = null;
-                activeMarkerProvider = configuration.EnableExperimentalPartyMarkers
-                    ? gameMarkerProvider
+                activeMarkerProvider = configuration.EnableLocalMarkers
+                    ? localMarkerProvider
                     : dryRunMarkerProvider;
                 simulationArmed = true;
                 simulationWave = 0;
@@ -1136,8 +1103,8 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        var operationsPending = activeMarkerProvider.ProducesGameMarkers
-            && gameMarkerProvider.PendingCommandCount != 0;
+        var operationsPending = activeMarkerProvider.ProducesMarkers
+            && activeMarkerProvider.PendingOperationCount != 0;
         var canSubmitNext = simulationWave < 8 && !operationsPending;
         if (!canSubmitNext)
         {
@@ -1164,7 +1131,7 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         ImGui.TextWrapped(operationsPending
-            ? $"模拟 Wave {simulationWave}/8：正在执行清标→新标队列"
+            ? $"模拟 Wave {simulationWave}/8：正在切换本地标点"
             : simulationWave == 8
                 ? "模拟八轮已全部提交；观察完成后请点击结束模拟并清理"
                 : $"模拟 Wave {simulationWave}/8：可手动提交下一轮");
@@ -1254,9 +1221,9 @@ public sealed class Plugin : IDalamudPlugin
                 throw new MarkerAssignmentException("模拟测试尚未启动或八轮已经完成。");
             }
 
-            if (activeMarkerProvider.ProducesGameMarkers && gameMarkerProvider.PendingCommandCount != 0)
+            if (activeMarkerProvider.ProducesMarkers && activeMarkerProvider.PendingOperationCount != 0)
             {
-                throw new MarkerAssignmentException("上一轮原生标点操作仍在处理中。");
+                throw new MarkerAssignmentException("上一轮本地标点操作仍在处理中。");
             }
 
             var wave = simulationWave + 1;
@@ -1271,7 +1238,7 @@ public sealed class Plugin : IDalamudPlugin
             activeMarkerProvider.Submit(assignment, targetRoles, localRole, partySlots);
             simulationWave = wave;
             currentAssignment = assignment;
-            status = $"模拟第 {wave} 轮已按清标→新标顺序提交到 {string.Join('/', targetRoles)}";
+            status = $"模拟第 {wave} 轮已清除上一轮，并在本机显示 {string.Join('/', targetRoles)} 的新标点";
         }
         catch (Exception exception)
         {
@@ -1490,9 +1457,9 @@ public sealed class Plugin : IDalamudPlugin
         currentAssignment = null;
         automationEngine.Reset();
         activeMarkerProvider.Clear(immediateCleanup);
-        if (!ReferenceEquals(activeMarkerProvider, gameMarkerProvider))
+        if (!ReferenceEquals(activeMarkerProvider, localMarkerProvider))
         {
-            gameMarkerProvider.Clear(immediateCleanup);
+            localMarkerProvider.Clear(immediateCleanup);
         }
         status = reason;
     }
@@ -1568,7 +1535,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.2.9";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.3.0";
 
     private enum MarkerDiagnosticPhase
     {

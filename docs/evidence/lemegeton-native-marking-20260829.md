@@ -1,5 +1,9 @@
 # Native party-marker reference — 2026-08-29
 
+> Historical evidence: version 0.3.0 removed the native Party Marker provider
+> from the runtime. This document is retained only to explain the superseded
+> 0.2.9 implementation and must not be treated as the current marker path.
+
 ## Provenance
 
 The owner supplied the installed Dalamud plugin files under the local folder
