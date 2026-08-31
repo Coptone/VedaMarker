@@ -70,7 +70,7 @@ Add the following URL under Dalamud Settings -> Experimental -> Custom Plugin
 Repositories, then search for `VedaMarker` in the plugin installer:
 
 ```text
-https://raw.githubusercontent.com/Coptone/VedaMarker/main/pluginmaster.json
+https://raw.githubusercontent.com/Coptone/VedaMarker/refs/heads/main/pluginmaster.json
 ```
 
 The published package is a testing build. Local soft markers are enabled by

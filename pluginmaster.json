@@ -23,8 +23,8 @@
     "LoadPriority": 0,
     "AcceptsFeedback": true,
     "RepoUrl": "https://github.com/Coptone/VedaMarker",
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/Coptone/VedaMarker/main/repository/VedaMarker.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/Coptone/VedaMarker/main/repository/VedaMarker.zip",
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/Coptone/VedaMarker/refs/heads/main/repository/VedaMarker.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/Coptone/VedaMarker/refs/heads/main/repository/VedaMarker.zip",
     "DownloadLinkTesting": null,
     "IsHide": false,
     "IsTestingExclusive": false
