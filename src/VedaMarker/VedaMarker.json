@@ -2,7 +2,7 @@
   "Author": "Coptone",
   "Name": "VedaMarker",
   "Punchline": "绝妖星 P2 遗弃末世自动点名与本地软标点。",
-  "Description": "VedaMarker：自动识别遗弃末世八轮点名并计算完整团队逻辑。0.3.2 修复原生 Omen 未真正启动，并预加载本地软标点图标以避免攻击/锁链/禁止切换时偶发消失。",
+  "Description": "VedaMarker：自动识别遗弃末世八轮点名并计算完整团队逻辑。0.3.3 新增只在本机显示的游戏原生分摊 LockOn，可手动测试并按 P2 分摊职责自动显示与清理。",
   "InternalName": "VedaMarker",
   "ApplicableVersion": "any",
   "Tags": ["dmu", "marker", "raid", "utility"]

@@ -50,6 +50,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly DryRunMarkerProvider dryRunMarkerProvider = new();
     private readonly LocalMarkerProvider localMarkerProvider;
     private readonly NativeOmenRenderer nativeOmenRenderer;
+    private readonly NativeShareLockonRenderer nativeShareLockonRenderer;
     private readonly CaptureRecorder captureRecorder;
     private readonly Dictionary<uint, CaptureActionMetadata> actionMetadataCache = [];
     private IMarkerProvider activeMarkerProvider;
@@ -109,6 +110,12 @@ public sealed class Plugin : IDalamudPlugin
             configurationChanged = true;
         }
 
+        if (configuration.Version < 6)
+        {
+            configuration.EnableForsakenNativeShareLockon = false;
+            configurationChanged = true;
+        }
+
         if (!float.IsFinite(configuration.LocalMarkerScale)
             || configuration.LocalMarkerScale is < 0.5f or > 1.5f)
         {
@@ -124,10 +131,11 @@ public sealed class Plugin : IDalamudPlugin
             () => ObjectTable.LocalPlayer?.EntityId,
             partySlot => currentParty.FirstOrDefault(member => member.PartyIndex + 1 == partySlot)?.EntityId);
         nativeOmenRenderer = new NativeOmenRenderer(SigScanner, Log);
+        nativeShareLockonRenderer = new NativeShareLockonRenderer(SigScanner, ObjectTable, Log);
 
         if (configurationChanged)
         {
-            configuration.Version = 5;
+            configuration.Version = 6;
             PluginInterface.SavePluginConfig(configuration);
         }
 
@@ -167,6 +175,7 @@ public sealed class Plugin : IDalamudPlugin
         mapEffectHook?.Dispose();
         actionEffectHook?.Dispose();
         nativeOmenRenderer.Dispose();
+        nativeShareLockonRenderer.Dispose();
         captureRecorder.Dispose();
         DutyState.DutyCompleted -= OnDutyCompleted;
         DutyState.DutyRecommenced -= OnDutyRecommenced;
@@ -344,6 +353,7 @@ public sealed class Plugin : IDalamudPlugin
             currentAssignment = null;
             localMarkerProvider.Clear();
             nativeOmenRenderer.Clear();
+            nativeShareLockonRenderer.Clear();
             activeAutomaticAoeWave = 0;
             activeAutomaticAoeDirection8 = -1;
             status = "本地标点显示失败，主控已停止并完成清理";
@@ -585,11 +595,14 @@ public sealed class Plugin : IDalamudPlugin
             var targetRoles = ResolveMarkerTargets(localRole);
             var partySlots = BuildPartySlots();
             activeMarkerProvider.Submit(update.Assignment, targetRoles, localRole, partySlots);
+            var shareLockonStatus = RefreshAutomaticShareLockons(
+                automationEngine.Snapshot,
+                targetRoles);
             currentAssignment = update.Assignment;
             var aoeStatus = configuration.EnableForsakenNativeTelegraphs
                 ? "；原生 AOE 正在等待本轮双塔方向"
                 : string.Empty;
-            status = $"{update.Message}；完整八人逻辑已确认，已对 {string.Join('/', targetRoles)} 清除上一轮并显示本地新标{aoeStatus}";
+            status = $"{update.Message}；完整八人逻辑已确认，已对 {string.Join('/', targetRoles)} 清除上一轮并显示本地新标{shareLockonStatus}{aoeStatus}";
         }
 
         if (update.Completed)
@@ -634,6 +647,90 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         return result;
+    }
+
+    private string RefreshAutomaticShareLockons(
+        ForsakenSnapshot snapshot,
+        IReadOnlyList<RoleSlot> targetRoles)
+    {
+        nativeShareLockonRenderer.Clear();
+        if (!configuration.EnableForsakenNativeShareLockon)
+        {
+            return string.Empty;
+        }
+
+        if (!nativeShareLockonRenderer.IsAvailable)
+        {
+            return $"；原生分摊特效不可用：{nativeShareLockonRenderer.LastStatus}";
+        }
+
+        try
+        {
+            var shareRoles = ForsakenShareTargetResolver.Resolve(snapshot, targetRoles);
+            var targets = ResolveRoleActors(shareRoles);
+
+            if (!nativeShareLockonRenderer.Replace(targets))
+            {
+                return $"；{nativeShareLockonRenderer.LastStatus}";
+            }
+
+            return shareRoles.Count == 0
+                ? "；当前目标本轮没有分摊点名"
+                : $"；已为 {string.Join('/', shareRoles)} 显示本机原生分摊特效";
+        }
+        catch (Exception exception)
+        {
+            nativeShareLockonRenderer.Clear();
+            Log.Error(exception, "VedaMarker automatic native share LockOn update failed");
+            return $"；原生分摊特效未显示：{exception.Message}";
+        }
+    }
+
+    private void PreviewNativeShareOnSelf()
+    {
+        var localPlayer = ObjectTable.LocalPlayer;
+        if (localPlayer is null)
+        {
+            status = "当前无法读取本人角色，原生分摊测试未启动";
+            return;
+        }
+
+        nativeShareLockonRenderer.Replace([localPlayer]);
+        status = nativeShareLockonRenderer.LastStatus;
+    }
+
+    private void PreviewNativeShareOnConfiguredTargets()
+    {
+        try
+        {
+            var localRole = ResolveLocalRole();
+            var targetRoles = ResolveMarkerTargets(localRole);
+            nativeShareLockonRenderer.Replace(ResolveRoleActors(targetRoles));
+            status = nativeShareLockonRenderer.LastStatus;
+        }
+        catch (Exception exception)
+        {
+            nativeShareLockonRenderer.Clear();
+            status = $"无法按当前目标范围测试原生分摊：{exception.Message}";
+            Log.Error(exception, "VedaMarker configured-target native share preview failed");
+        }
+    }
+
+    private IReadOnlyList<IGameObject> ResolveRoleActors(IEnumerable<RoleSlot> roles)
+    {
+        var targets = new List<IGameObject>();
+        foreach (var role in roles)
+        {
+            if (!roleCoordinator.Assignments.TryGetValue(role, out var entityId))
+            {
+                throw new MarkerAssignmentException($"{role} 尚未绑定队员，无法显示原生分摊特效。");
+            }
+
+            targets.Add(ObjectTable.SearchByEntityId(entityId)
+                ?? throw new MarkerAssignmentException($"无法读取 {role} 的场景对象，原生分摊特效未显示。"));
+        }
+
+        return targets;
     }
 
     private LocalMarkerObservation ReadLocalMarker()
@@ -946,6 +1043,98 @@ public sealed class Plugin : IDalamudPlugin
         ImGui.TextWrapped(nativeOmenRenderer.IsAvailable
             ? "原生 AOE 使用游戏自身 Omen 特效，仅本机可见；首次实机确认前保持显式勾选，不会替代游戏判定。"
             : nativeOmenRenderer.LastStatus);
+
+        var nativeShareLockonEnabled = configuration.EnableForsakenNativeShareLockon;
+        if (anyControllerArmed)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Checkbox("启用 P2 游戏原生分摊点名（实验）", ref nativeShareLockonEnabled))
+        {
+            configuration.EnableForsakenNativeShareLockon = nativeShareLockonEnabled;
+            if (!nativeShareLockonEnabled)
+            {
+                nativeShareLockonRenderer.Clear();
+            }
+
+            PluginInterface.SavePluginConfig(configuration);
+            status = nativeShareLockonEnabled
+                ? "已启用原生分摊点名：正式主控会按当前标点目标范围，仅为分摊职责显示本机 LockOn"
+                : "已关闭并清理原生分摊点名";
+        }
+
+        if (anyControllerArmed)
+        {
+            ImGui.EndDisabled();
+        }
+
+        ImGui.TextWrapped(nativeShareLockonRenderer.IsAvailable
+            ? "分摊点名使用游戏自身 com_share3t LockOn，挂在角色身上并跟随移动；只在本机显示，默认关闭等待实机确认。"
+            : nativeShareLockonRenderer.LastStatus);
+
+        var canTestShare = !anyControllerArmed
+            && !markerDiagnosticRunning
+            && ObjectTable.LocalPlayer is not null
+            && nativeShareLockonRenderer.IsAvailable;
+        if (!canTestShare)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Button("在本人头顶测试原生分摊"))
+        {
+            PreviewNativeShareOnSelf();
+        }
+
+        if (!canTestShare)
+        {
+            ImGui.EndDisabled();
+        }
+
+        if (configuration.MarkerTargetMode != MarkerTargetMode.SelfOnly)
+        {
+            ImGui.SameLine();
+            var canTestConfiguredShare = canTestShare
+                && rolesConfirmed
+                && roleCoordinator.Assignments.Count == 8
+                && HasConfiguredMarkerTargets();
+            if (!canTestConfiguredShare)
+            {
+                ImGui.BeginDisabled();
+            }
+
+            if (ImGui.Button("按当前标点目标范围测试分摊"))
+            {
+                PreviewNativeShareOnConfiguredTargets();
+            }
+
+            if (!canTestConfiguredShare)
+            {
+                ImGui.EndDisabled();
+            }
+        }
+
+        ImGui.SameLine();
+        var canClearShare = !anyControllerArmed && nativeShareLockonRenderer.ActiveCount != 0;
+        if (!canClearShare)
+        {
+            ImGui.BeginDisabled();
+        }
+
+        if (ImGui.Button("清除原生分摊测试"))
+        {
+            nativeShareLockonRenderer.Clear();
+            status = "原生分摊测试已清除";
+        }
+
+        if (!canClearShare)
+        {
+            ImGui.EndDisabled();
+        }
+
+        ImGui.TextWrapped(
+            $"原生分摊状态：{nativeShareLockonRenderer.LastStatus}；当前显示 {nativeShareLockonRenderer.ActiveCount} 个");
 
         ImGui.TextWrapped($"Marker Provider：{activeMarkerProvider.Name}");
 
@@ -1556,6 +1745,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         localAoeSimulationActive = false;
         ClearTelegraphs();
+        nativeShareLockonRenderer.Clear();
         automationEngine.Reset();
         towerDirectionTracker.Reset();
         currentAssignment = null;
@@ -1569,9 +1759,12 @@ public sealed class Plugin : IDalamudPlugin
         var aoeStatus = configuration.EnableForsakenNativeTelegraphs
             ? "；原生 AOE 会在每轮双塔方向识别完成后显示"
             : string.Empty;
+        var shareStatus = configuration.EnableForsakenNativeShareLockon
+            ? "；分摊职责会显示本机原生分摊点名"
+            : string.Empty;
         status = resumedAfterWipe
-            ? $"副本已重新开始：{providerStatus}主控已自动恢复，等待遗弃末世开场八人点名{aoeStatus}"
-            : $"{providerStatus}主控已启动并授权本次副本自动恢复；等待遗弃末世开场八人点名{aoeStatus}";
+            ? $"副本已重新开始：{providerStatus}主控已自动恢复，等待遗弃末世开场八人点名{shareStatus}{aoeStatus}"
+            : $"{providerStatus}主控已启动并授权本次副本自动恢复；等待遗弃末世开场八人点名{shareStatus}{aoeStatus}";
     }
 
     private bool TryResumeEncounterController()
@@ -1646,6 +1839,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             localMarkerProvider.Clear(immediateCleanup);
         }
+        nativeShareLockonRenderer.Clear();
         ClearTelegraphs();
         status = reason;
     }
@@ -1721,7 +1915,7 @@ public sealed class Plugin : IDalamudPlugin
     };
 
     private static string PluginVersion() =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.3.1";
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.3.3";
 
     private enum MarkerDiagnosticPhase
     {

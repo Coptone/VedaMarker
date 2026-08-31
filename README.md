@@ -4,7 +4,7 @@ VedaMarker is a standalone Dalamud plugin for the DMU P2 **Forsaken** encounter.
 The current testing milestone provides deterministic role inference, automatic
 eight-wave status recognition, dry-run marker assignments, local soft-marker
 display, a native-Omen range preview and opt-in encounter range provider,
-and a privacy-preserving whole-duty evidence recorder.
+an opt-in game-native share LockOn, and a privacy-preserving whole-duty evidence recorder.
 
 ## Current status
 
@@ -14,6 +14,7 @@ and a privacy-preserving whole-duty evidence recorder.
 - Shared party target markers: removed from the runtime path; VedaMarker no longer calls the party marking controller
 - Native AOE preview: implemented for solo testing in any duty; manually selects Wave 1-8 and Direction 0-7 and uses game `vfx/omen` resources through the static-VFX create/run/transform lifecycle
 - Automatic encounter AOE ranges: opt-in implementation pairs each recognized wave with its two tower MapEffects and renders the supplied native cone/circle resources
+- Native share indicator: opt-in `com_share3t` LockOn attached only to selected roles whose current P2 mechanic is Share; manual self/configured-target preview and cleanup buttons are available
 - Persistent point-name VFX: blocked on captured resource evidence
 - Native AOE default-on status: blocked on the first in-game scale/orientation/cleanup validation
 
@@ -50,6 +51,13 @@ clears the old range on every assignment transition, waits for the current
 wave's complete two-tower Direction8 observation, and then creates the new
 native range. It remains opt-in until the first in-game visual validation.
 
+The native share indicator is a separate actor-attached VFX path. It clears the
+previous local LockOn at every assignment transition and creates `com_share3t`
+only for selected target roles whose current mechanic is `Share`. It follows the
+actor, is visible only to the plugin user, and is cleared on mechanism changes,
+wave changes, wipes, stop, territory exit, completion, error, and unload. The
+encounter checkbox is off by default until its first in-game visual validation.
+
 The built-in redacted recorder is started manually and never uploads data. It
 exports a schema-v2 local ZIP containing session aliases, jobs/roles, statuses,
 all observed cast and ActionEffect IDs with localized names when available,
@@ -80,6 +88,10 @@ For a solo native-AOE display test, enter any duty, open `/vedamarker`, and clic
 `以本人当前位置启动原生 AOE 测试`. Change Wave and Direction while watching
 the game's own Omen effect; use `把模拟中心移到本人当前位置` whenever a clearer
 area is needed. This feature does not require local soft markers to be enabled.
+
+For a solo native-share display test, enter any duty, open `/vedamarker`, click
+`在本人头顶测试原生分摊`, then click `清除原生分摊测试`. Enable the separate
+P2 experimental checkbox only after confirming both display and cleanup.
 
 ## Repository layout
 

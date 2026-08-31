@@ -19,6 +19,7 @@ Dalamud observations
   -> DryRunMarkerProvider
   -> LocalMarkerProvider (manually armed, configurable target scope, client-local)
   -> NativeOmenRenderer (explicit opt-in, tower MapEffect direction, client-local)
+  -> NativeShareLockonRenderer (explicit opt-in, actor-attached, client-local)
 ```
 
 The cross-duty simulator bypasses encounter observations but not assignment or
@@ -59,8 +60,16 @@ then recreated only after that wave's direction is complete. The arena center is
 fixed at `(100, 100)` in X/Z and uses the local player's floor Y. Failure to
 create or clear an Omen never stops or invalidates marker processing.
 
+The native share LockOn path is independent from the local icon provider and
+native Omen path. For each complete assignment, `ForsakenShareTargetResolver`
+intersects the selected marker target roles with players whose current mechanic
+is `Share`. The adapter clears the previous actor VFX before attaching
+`vfx/lockon/eff/com_share3t.avfx` to those actors. Missing signatures, targets,
+or VFX creation report a local status and never invalidate the marker assignment.
+The feature is opt-in until an in-game display and cleanup PoC succeeds.
+
 Role confirmation and controller authorization are scoped to the current duty
-instance. A wipe clears marker/Omen state and resets the encounter state machine;
+instance. A wipe clears marker/Omen/LockOn state and resets the encounter state machine;
 recommence automatically restores a previously authorized controller. Leaving
 the territory, completing the duty, observing a real party-composition change,
 encounter errors, or manual stop revokes authorization.

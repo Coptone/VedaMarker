@@ -3,11 +3,11 @@
     "Author": "Coptone",
     "Name": "VedaMarker",
     "InternalName": "VedaMarker",
-    "AssemblyVersion": "0.3.2.0",
+    "AssemblyVersion": "0.3.3.0",
     "TestingAssemblyVersion": null,
     "Punchline": "绝妖星 P2 遗弃末世自动点名与本地软标点。",
-    "Description": "VedaMarker 0.3.2 测试版：修复原生 Omen 创建后未真正启动的问题；八种本地软标点图标改为启动时预加载，切换资源未就绪时保留标点并重试。",
-    "Changelog": "修正原生静态 VFX 的启动入口，AOE 测试不再把普通 Update 函数误当作资源启动函数。攻击/锁链/禁止八种本地图标全部预加载；短暂加载失败不再清空当前标点，并在控制台显示真实绘制状态。P3 未改动；AOE 仍保持实验性显式启用，等待实机验收。",
+    "Description": "VedaMarker 0.3.3 测试版：新增本机游戏原生分摊 LockOn，提供本人/当前目标范围测试，并在 P2 按真实分摊职责自动显示与清理。",
+    "Changelog": "新增 com_share3t 游戏原生分摊点名，默认关闭且只在本机可见。控制台可在本人或当前标点目标范围测试并手动清除；正式 P2 路径直接读取 Share 机制，不通过攻击/锁链图标反推。换点名、换轮、团灭、停用、退本、完成、异常和卸载都会清理。P3 未改动。",
     "ApplicableVersion": "any",
     "Tags": [
       "dmu",
@@ -16,7 +16,7 @@
       "utility"
     ],
     "DalamudApiLevel": 15,
-    "LastUpdate": 1788186474,
+    "LastUpdate": 1788188816,
     "LoadRequiredState": 0,
     "LoadSync": false,
     "CanUnloadAsync": false,

@@ -34,8 +34,8 @@ SOFTWARE.
 
 ## VFXEditor
 
-The local native-Omen lifecycle follows the static VFX creation, transform,
-and cleanup pattern documented by VFXEditor:
+The local native-Omen and actor-attached LockOn lifecycles follow the static and
+actor VFX creation/cleanup patterns documented by VFXEditor:
 <https://github.com/0ceal0t/Dalamud-VFXEditor>
 
 MIT License
