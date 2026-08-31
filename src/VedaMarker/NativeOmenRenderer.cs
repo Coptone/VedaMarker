@@ -12,6 +12,7 @@ internal sealed unsafe class NativeOmenRenderer : IDisposable
     private const string PoolName = "Client.System.Scheduler.Instance.VfxObject";
     private const string CirclePath = "vfx/omen/eff/m0347_sircle_01m1.avfx";
     private const string ConePath = "vfx/omen/eff/z6r3_b4_fan90_k2.avfx";
+    private const string RunSignature = "E8 ?? ?? ?? ?? B0 02 EB 02";
     private const string RemoveSignature =
         "40 53 48 83 EC 20 48 8B D9 48 8B 89 ?? ?? ?? ?? 48 85 C9 74 28 33 D2 E8 ?? ?? ?? ?? 48 8B 8B ?? ?? ?? ?? 48 85 C9";
 
@@ -29,7 +30,7 @@ internal sealed unsafe class NativeOmenRenderer : IDisposable
             create = Marshal.GetDelegateForFunctionPointer<StaticVfxCreateDelegate>(
                 VfxObject.Addresses.Create.Value);
             run = Marshal.GetDelegateForFunctionPointer<StaticVfxRunDelegate>(
-                VfxObject.Addresses.Update.Value);
+                sigScanner.ScanText(RunSignature));
             remove = Marshal.GetDelegateForFunctionPointer<StaticVfxRemoveDelegate>(
                 sigScanner.ScanText(RemoveSignature));
             IsAvailable = true;
@@ -117,7 +118,7 @@ internal sealed unsafe class NativeOmenRenderer : IDisposable
                 throw new InvalidOperationException($"游戏未能创建 Omen 资源：{path}");
             }
 
-            run!(vfx, 0f, -1);
+            run!(vfx, 0f, uint.MaxValue);
             vfx->Position = new Vector3(
                 arenaCenter.X + telegraph.Origin.X,
                 arenaCenter.Y + 0.05f,
@@ -159,7 +160,7 @@ internal sealed unsafe class NativeOmenRenderer : IDisposable
     private delegate VfxObject* StaticVfxCreateDelegate(byte* path, byte* poolName);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate void StaticVfxRunDelegate(VfxObject* vfx, float time, int flags);
+    private delegate nint StaticVfxRunDelegate(VfxObject* vfx, float time, uint flags);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate nint StaticVfxRemoveDelegate(VfxObject* vfx);

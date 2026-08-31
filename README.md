@@ -10,9 +10,9 @@ and a privacy-preserving whole-duty evidence recorder.
 
 - P0 scaffold, manual controller, and redacted capture workflow: implemented and captured in game
 - P1 role inference, Forsaken state machine, automatic wave recognition, and marker rules: implemented and unit tested
-- Local soft markers: game Attack 1-4, Bind 1-2, and Ignore 1-2 icons projected above selected actors; visible only to the plugin user, with self-only as the default scope
+- Local soft markers: game Attack 1-4, Bind 1-2, and Ignore 1-2 icons projected above selected actors; visible only to the plugin user, with self-only as the default scope; all eight textures are preloaded and an unready texture is retried without dropping the assignment
 - Shared party target markers: removed from the runtime path; VedaMarker no longer calls the party marking controller
-- Native AOE preview: implemented for solo testing in any duty; manually selects Wave 1-8 and Direction 0-7 and uses game `vfx/omen` resources
+- Native AOE preview: implemented for solo testing in any duty; manually selects Wave 1-8 and Direction 0-7 and uses game `vfx/omen` resources through the static-VFX create/run/transform lifecycle
 - Automatic encounter AOE ranges: opt-in implementation pairs each recognized wave with its two tower MapEffects and renders the supplied native cone/circle resources
 - Persistent point-name VFX: blocked on captured resource evidence
 - Native AOE default-on status: blocked on the first in-game scale/orientation/cleanup validation

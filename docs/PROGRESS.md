@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-08-29
+Last updated: 2026-08-31
 
 ## Confirmed decisions
 
@@ -31,6 +31,7 @@ Last updated: 2026-08-29
 - [x] P1 replace shared party-marker runtime with local Attack/Bind/Ignore soft markers and configurable target scope
 - [x] P1 manually controlled local world-space station/range simulator for any duty
 - [x] P1 replace projected range polygons with a local native-Omen preview and connect the same provider to Forsaken wave/MapEffect recognition behind an explicit opt-in
+- [x] P1 correct the static-VFX run entry used by the native-Omen preview and retain local marker assignments while preloaded icon resources become ready
 - [x] P1 retain one explicit controller authorization across duty wipes and automatically restore it on recommence
 - [x] P0 schema-v2 whole-duty capture implementation and privacy/export test
 - [ ] P0 in-game validation: schema-v2 action names/IDs, spatial observations, ActionEffect targets, and MapEffect events
@@ -49,5 +50,6 @@ Items requiring game evidence remain unchecked even when the code builds.
 - Dalamud API 15 Release build: 0 warnings, 0 errors against the official staging development files.
 - Full in-game Forsaken status sequence is documented under `docs/evidence/`.
 - The 0.3.0 runtime removes shared party-marker mutation. It uses game icon assets 61201-61204, 61211-61212, and 61221-61222 as local world-to-screen soft markers. The code/build checks do not close the in-game visual PoC.
-- The 0.3.1 native AOE path uses the supplied `z6r3_b4_fan90_k2` cone and `m0347_sircle_01m1` circle resources. Manual cross-duty preview and opt-in Forsaken runtime wiring are implemented; code-level checks do not close the native visual, Direction8, timing, or cleanup PoCs.
-- The 0.3.1 release ZIP SHA-256 is `1650BDD01CA660434F8BDF5040A02655F0208744EB2CCAA9AA12BDE6446607C9`.
+- The 0.3.2 native AOE path uses the supplied `z6r3_b4_fan90_k2` cone and `m0347_sircle_01m1` circle resources. It corrects the 0.3.1 error that called a `VfxObject` update address instead of the distinct static-VFX run function. Manual cross-duty preview and opt-in Forsaken runtime wiring are implemented; code-level checks do not close the native visual, Direction8, timing, or cleanup PoCs.
+- The 0.3.2 local marker provider requests all eight icon textures during construction and retains the actor-to-marker mapping when a texture is not ready, so a transition from Attack to Bind/Ignore can retry on later frames instead of becoming a permanent clear. In-game transition validation remains pending.
+- The 0.3.2 release ZIP SHA-256 is `F860EEB62241E71D15037B40D9807D20F1B817C68818BDFFB77F5476CD796FB3`.

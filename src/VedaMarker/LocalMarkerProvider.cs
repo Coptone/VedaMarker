@@ -48,6 +48,13 @@ internal sealed class LocalMarkerProvider : IMarkerProvider
         this.resolveScale = resolveScale;
         this.resolveLocalActorId = resolveLocalActorId;
         this.resolvePartySlotActorId = resolvePartySlotActorId;
+
+        foreach (var marker in MarkerIconIds)
+        {
+            textures.Add(
+                marker.Key,
+                textureProvider.GetFromGameIcon(new GameIconLookup(marker.Value)));
+        }
     }
 
     public string Name => "本地软标点";
@@ -59,6 +66,8 @@ internal sealed class LocalMarkerProvider : IMarkerProvider
     public int ActiveMarkerCount => activeMarkers.Count;
 
     public string LastOperation { get; private set; } = "尚未显示本地标点";
+
+    public string LastDrawStatus { get; private set; } = "八种本地图标已预加载";
 
     public void Submit(
         ValidatedMarkerAssignment assignment,
@@ -110,6 +119,7 @@ internal sealed class LocalMarkerProvider : IMarkerProvider
 
         var drawList = ImGui.GetForegroundDrawList();
         var scale = Math.Clamp(resolveScale(), 0.5f, 1.5f);
+        var drawn = 0;
         foreach (var entry in activeMarkers)
         {
             var actor = objectTable.SearchByEntityId(entry.Key);
@@ -118,10 +128,33 @@ internal sealed class LocalMarkerProvider : IMarkerProvider
                 continue;
             }
 
-            var texture = GetTexture(entry.Value).GetWrapOrEmpty();
+            IDalamudTextureWrap texture;
+            try
+            {
+                texture = GetTexture(entry.Value).GetWrapOrEmpty();
+            }
+            catch (Exception exception)
+            {
+                LastDrawStatus =
+                    $"{entry.Value} 图标资源暂未就绪，保留标点并在下一帧重试：{exception.Message}";
+                continue;
+            }
+
+            if (texture.Handle == 0 || texture.Width <= 0 || texture.Height <= 0)
+            {
+                LastDrawStatus = $"{entry.Value} 图标资源正在加载，保留标点并在下一帧重试";
+                continue;
+            }
+
             var size = new Vector2(texture.Width, texture.Height) * (2f * scale);
             var topLeft = screen - new Vector2(size.X / 2f, size.Y);
             drawList.AddImage(texture.Handle, topLeft, topLeft + size);
+            drawn++;
+        }
+
+        if (drawn == activeMarkers.Count)
+        {
+            LastDrawStatus = $"当前 {drawn} 个本地标点均已绘制";
         }
     }
 

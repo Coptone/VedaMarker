@@ -925,7 +925,8 @@ public sealed class Plugin : IDalamudPlugin
                 ImGui.TextUnformatted($"{MarkerDisplayName(result.Marker)}：{markerResult}；{clearResult}");
             }
 
-            ImGui.TextWrapped($"最近操作：{localMarkerProvider.LastOperation}；当前显示 {localMarkerProvider.ActiveMarkerCount} 个本地标点");
+            ImGui.TextWrapped(
+                $"最近操作：{localMarkerProvider.LastOperation}；当前显示 {localMarkerProvider.ActiveMarkerCount} 个本地标点；绘制状态：{localMarkerProvider.LastDrawStatus}");
         }
 
         var nativeTelegraphsEnabled = configuration.EnableForsakenNativeTelegraphs;

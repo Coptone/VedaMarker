@@ -3,11 +3,11 @@
     "Author": "Coptone",
     "Name": "VedaMarker",
     "InternalName": "VedaMarker",
-    "AssemblyVersion": "0.3.1.0",
+    "AssemblyVersion": "0.3.2.0",
     "TestingAssemblyVersion": null,
     "Punchline": "绝妖星 P2 遗弃末世自动点名与本地软标点。",
-    "Description": "VedaMarker 0.3.1 测试版：本地软标点只有插件使用者可见；首次启动后本次副本团灭重开会自动恢复。新增游戏原生 Omen AOE 测试，并可显式启用遗弃末世每轮自动范围。",
-    "Changelog": "主控改为每次副本只需手动授权一次，团灭清理后在 DutyRecommenced 自动恢复，退本/完成/换队/手动停止仍会撤销。AOE 不再画屏幕多边形：新增原生 30m/90度扇形与5m钢铁测试，正式流程按每轮双塔 MapEffect 自动识别 Direction8 后显示并换轮清理；实机验证前默认关闭。",
+    "Description": "VedaMarker 0.3.2 测试版：修复原生 Omen 创建后未真正启动的问题；八种本地软标点图标改为启动时预加载，切换资源未就绪时保留标点并重试。",
+    "Changelog": "修正原生静态 VFX 的启动入口，AOE 测试不再把普通 Update 函数误当作资源启动函数。攻击/锁链/禁止八种本地图标全部预加载；短暂加载失败不再清空当前标点，并在控制台显示真实绘制状态。P3 未改动；AOE 仍保持实验性显式启用，等待实机验收。",
     "ApplicableVersion": "any",
     "Tags": [
       "dmu",
@@ -16,7 +16,7 @@
       "utility"
     ],
     "DalamudApiLevel": 15,
-    "LastUpdate": 1788042549,
+    "LastUpdate": 1788186474,
     "LoadRequiredState": 0,
     "LoadSync": false,
     "CanUnloadAsync": false,
